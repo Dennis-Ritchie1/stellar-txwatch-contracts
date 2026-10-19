@@ -45,6 +45,12 @@ jobs:
       - name: Format check
         run: cargo fmt --check
 
+      # Issue #299 — Documentation build check (required status check: doc-check)
+      - name: Doc check
+        run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
       # Issue #105 — Dependency vulnerability scanning
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
