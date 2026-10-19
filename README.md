@@ -331,3 +331,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License
 
 MIT
+
+## Handsoff notes
+
+<!-- handsoff-issue-306 -->
+- #306: refactor: extract shared alert registration logic between lib.rs and contract.rs
