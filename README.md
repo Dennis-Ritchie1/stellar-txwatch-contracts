@@ -331,3 +331,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License
 
 MIT
+
+## Handsoff notes
+
+<!-- handsoff-issue-317 -->
+- #317: chore: remove #[allow(dead_code)] from contract.rs and fix underlying dead code warnings
