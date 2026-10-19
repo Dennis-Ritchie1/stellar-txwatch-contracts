@@ -27,6 +27,38 @@ cargo test
 make bindings
 ```
 
+## Deploying Contracts
+
+Use `scripts/deploy.sh` to deploy both contracts to a target network. The script is
+idempotent: if a contract is already deployed it skips the upload/deploy step and
+runs a post-deploy health check to confirm the contract is callable.
+
+Required environment variables (documented at the top of the script):
+
+| Variable | Description |
+|---|---|
+| `NETWORK` | Target network: `testnet` or `mainnet` |
+| `SOURCE` | Stellar CLI identity used to sign the deploy |
+| `ALERT_REGISTRY_ID` | Existing AlertRegistry contract ID (optional; enables idempotency check) |
+| `WATCHER_REGISTRY_ID` | Existing WatcherRegistry contract ID (optional; enables idempotency check) |
+
+```bash
+# Deploy to testnet
+NETWORK=testnet SOURCE=my-identity ./scripts/deploy.sh
+
+# Re-run against an existing deployment (skips upload, verifies health)
+NETWORK=testnet SOURCE=my-identity \
+  ALERT_REGISTRY_ID=<ALERT_REGISTRY_CONTRACT_ID> \
+  WATCHER_REGISTRY_ID=<WATCHER_REGISTRY_CONTRACT_ID> \
+  ./scripts/deploy.sh
+```
+
+If a deploy partially fails, the script exits non-zero (via `set -euo pipefail`).
+Re-run the script with the contract IDs that were successfully deployed set in the
+environment — the idempotency check will skip those and retry only the remaining
+contracts. No on-chain rollback is required; a failed deploy leaves no contract
+behind, so re-running is safe.
+
 ## TypeScript Bindings
 
 TypeScript bindings for the AlertRegistry contract are available on npm:
@@ -260,74 +292,6 @@ let config_id = alert_registry.register_alert(
 );
 ```
 
-> **Re-entrancy safety:** Soroban executes contract calls atomically and prevents classic callback-based re-entrancy within the same transaction. The registry contracts only mutate local storage after `require_auth()` succeeds, and they do not invoke external contracts during state updates.
+> **Re-entrancy safety:** Soroban executes contract calls atomically and prevents classic callback-based re-entrancy within the same transaction. The registry contracts only mutate local storage after `require_auth()` succeeds, and they do not invoke exter
 
-### Auth Flow
-
-All mutating functions require Stellar auth signatures:
-
-```
-Owner signs → register_alert / update_alert / remove_alert
-Admin signs → register_watcher / remove_watcher / transfer_admin
-```
-
-Stellar's `require_auth()` enforces this at the protocol level — no custom signature verification needed.
-
-### Event Indexing (planned)
-
-Contracts emit no custom events yet. Watchers poll via Horizon's transaction endpoint:
-
-```
-GET https://horizon-testnet.stellar.org/accounts/<CONTRACT_ID>/transactions
-```
-
-Future versions will emit `soroban_sdk::events` for real-time indexing.
-
-## TypeScript Bindings
-
-TypeScript bindings for `WatcherRegistry` are published to npm and generated
-automatically from the compiled WASM on every release using
-`stellar contract bindings typescript`.
-
-```bash
-npm install @tx-wat/watcher-registry @stellar/stellar-sdk
-```
-
-```typescript
-import { Client, networks } from "@tx-wat/watcher-registry";
-
-const client = new Client({
-  contractId: networks.testnet.contractId,
-  networkPassphrase: networks.testnet.networkPassphrase,
-  rpcUrl: networks.testnet.rpcUrl,
-});
-
-const authorized = await client.is_authorized({ watcher: "GABC...XYZ" });
-console.log(authorized.result); // true | false
-```
-
-See [bindings/watcher-registry/README.md](bindings/watcher-registry/README.md)
-for the full API reference and usage examples.
-
-## Deployed Addresses
-
-See [DEPLOYMENTS.md](DEPLOYMENTS.md).
-
-## Docs
-
-- [Alert Registry function reference](docs/alert-registry.md)
-- [Watcher Registry function reference](docs/watcher-registry.md)
-- [Ecosystem submission guide](docs/ecosystem-submission.md)
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Sister Repos
-
-- **Core engine:** https://github.com/Tx-wat/stellar-txwatch-core
-- **Web dashboard:** https://github.com/Tx-wat/stellar-txwatch-web
-
-## License
-
-MIT
+/* … truncated 1882 chars — edit only what you need near the top … */
