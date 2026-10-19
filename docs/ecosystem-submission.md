@@ -104,6 +104,17 @@ Before opening the PR, verify:
 - [ ] Each public function has a rustdoc comment with `# Auth`, `# Arguments`,
       and `# Returns` sections.
 - [ ] A `README.md` exists at the contract crate root (see template below).
+- [ ] `contracts/alert-registry/README.md` covers all 7 required sections:
+      overview, key functions table (name, description, auth required),
+      storage schema summary, events emitted, quick-start build/test commands,
+      deployment information (testnet contract ID), and license.
+- [ ] `contracts/watcher-registry/README.md` covers all 7 required sections:
+      overview, key functions table (name, description, auth required),
+      storage schema summary, events emitted, quick-start build/test commands,
+      deployment information (testnet contract ID), and license.
+- [ ] Both per-contract READMEs cross-reference the main `docs/` pages
+      (`docs/alert-registry.md`, `docs/watcher-registry.md`, `docs/storage.md`,
+      `docs/events.md`, `docs/ttl.md`, `docs/testing.md`).
 
 ### Per-contract README template
 
@@ -123,17 +134,34 @@ example.
 - Pattern 1
 - Pattern 2
 
-## Build
+## Key functions
+
+| Function | Description | Auth required |
+|---|---|---|
+| `fn_name` | What it does | Yes / No |
+
+## Storage schema
+
+Summary of instance / persistent keys and their value types.
+
+## Events emitted
+
+List of events published via `env.events().publish()`.
+
+## Quick start
 
 ```bash
 cargo build --release --target wasm32-unknown-unknown
-```
-
-## Test
-
-```bash
 cargo test
 ```
+
+## Deployment
+
+Testnet contract ID: `<CONTRACT_ID>` (see [DEPLOYMENTS.md](../../DEPLOYMENTS.md)).
+
+## License
+
+MIT — see [LICENSE](../../LICENSE).
 
 ## Function reference
 
