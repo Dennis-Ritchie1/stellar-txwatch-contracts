@@ -20,7 +20,7 @@ jobs:
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
-          components: clippy, rustfmt
+          components: clippy, rustfmt, llvm-tools-preview
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -59,6 +59,33 @@ jobs:
       # Issue #101 — Formatting check
       - name: Format check
         run: cargo fmt --check
+
+      # Issue #321 — code coverage via cargo-llvm-cov (accurate for no_std)
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage report
+        run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+
+      # Issue #321 — coverage gate: fail CI if line coverage drops below 80%
+      - name: Enforce coverage gate (>= 80%)
+        run: |
+          total=$(cargo llvm-cov report --summary-only --json 2>/dev/null \
+            | grep -o '"lines":{[^}]*"percent":[0-9.]*' \
+            | grep -o '[0-9.]*$')
+          if [ -z "$total" ]; then
+            echo "::error::Unable to determine coverage percentage"
+            exit 1
+          fi
+          echo "Line coverage: ${total}%"
+          awk -v cov="$total" 'BEGIN { if (cov + 0 < 80) { printf "::error::Coverage %.2f%% is below the 80%% threshold\n", cov; exit 1 } }'
+
+      # Issue #321 — upload coverage report to Codecov
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
 
       # Issue #105 — Dependency vulnerability scanning
       - name: Install cargo-audit
