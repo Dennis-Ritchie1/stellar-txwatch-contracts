@@ -336,3 +336,6 @@ MIT
 
 <!-- handsoff-issue-306 -->
 - #306: refactor: extract shared alert registration logic between lib.rs and contract.rs
+
+<!-- handsoff-issue-307 -->
+- #307: refactor: replace validate_rules string comparisons with a const rule set for extensibility
