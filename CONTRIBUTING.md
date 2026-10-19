@@ -46,6 +46,29 @@ bash scripts/deploy.sh
 
 3. Update `DEPLOYMENTS.md` with the printed contract addresses.
 
+## Changelog Updates
+
+Every PR that changes contract behavior, adds a function, or fixes a bug must
+include a `CHANGELOG.md` update. Read-only changes (docs, tests, CI) are
+optional but encouraged.
+
+1. Add entries under the `[Unreleased]` section.
+2. Use one of the categories: **Added**, **Fixed**, **Changed**, **Deprecated**,
+   **Removed**, **Security**.
+3. Reference the issue number at the end of the entry, e.g. `(#123)`.
+
+Example entry:
+
+```markdown
+## [Unreleased]
+
+### Added
+- `rule:burn` descriptor accepted by `validate_rules` (#123)
+
+### Fixed
+- Reject unauthorized `set_admin` calls (#124)
+```
+
 ## Adding a New Function to an Existing Contract
 
 1. Add the function inside the `#[contractimpl]` block in `contracts/<name>/src/lib.rs`.
