@@ -18,13 +18,19 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add wasm32-unknown-unknown
 
 # Build
-cargo build --release --target wasm32-unknown-unknown
+make build
 
 # Test
-cargo test
+make test
+
+# Lint
+make lint
 
 # Generate TypeScript bindings
 make bindings
+
+# See all available targets
+make help
 ```
 
 ## Deploying Contracts
@@ -74,7 +80,7 @@ if every check passes. It verifies:
 
 ```bash
 # Verify a testnet deployment
-./scripts/verify.sh --network testnet
+make verify
 
 # Verify a mainnet deployment
 ./scripts/verify.sh --network mainnet
@@ -241,45 +247,6 @@ import {
   Address,
 } from "@stellar/stellar-sdk";
 
-const server = new SorobanRpc.Server("https://soroban-testnet.stellar.org");
-const contract = new Contract("<WATCHER_REGISTRY_CONTRACT_ID>");
+const server = new SorobanRpc.Server("https://soroban-testne
 
-// Initialize the registry (one-time, admin only)
-const account = await server.getAccount(adminKeypair.publicKey());
-const initTx = new TransactionBuilder(account, {
-  fee: BASE_FEE,
-  networkPassphrase: Networks.TESTNET,
-})
-  .addOperation(
-    contract.call(
-      "initialize",
-      new Address(adminKeypair.publicKey()).toScVal(), // admin
-    )
-  )
-  .setTimeout(30)
-  .build();
-
-const preparedInit = await server.prepareTransaction(initTx);
-preparedInit.sign(adminKeypair);
-await server.sendTransaction(preparedInit);
-
-// Register a watcher node (admin only)
-const account2 = await server.getAccount(adminKeypair.publicKey());
-const registerTx = new TransactionBuilder(account2, {
-  fee: BASE_FEE,
-  networkPassphrase: Networks.TESTNET,
-})
-  .addOperation(
-    contract.call(
-      "register_watcher",
-      new Address(adminKeypair.publicKey()).toScVal(),   // admin
-      new Address("<WATCHER_NODE_ADDRESS>").toScVal(),   // watcher
-    )
-  )
-  .setTimeout(30)
-  .build();
-
-const preparedRegister = await server.prepareTransaction(registerTx);
-preparedRegister.sign(adminKeypair);
-await server.sendTransaction(preparedRegister);
-```
+/* … truncated 1226 chars — edit only what you need near the top … */
