@@ -1,7 +1,7 @@
 use soroban_sdk::{symbol_short, vec, Address, Env, Vec};
 
 use crate::types::{AlertConfig, ContractError, DataKey};
-use crate::{DEFAULT_TTL};
+use crate::{DEFAULT_TTL, RATE_LIMIT_COUNT, RATE_LIMIT_WINDOW};
 
 // ── ID counter ────────────────────────────────────────────────────────────────
 
@@ -228,4 +228,35 @@ pub fn get_limit(env: &Env) -> u32 {
 
 pub fn set_limit(env: &Env, limit: u32) {
     env.storage().instance().set(&symbol_short!("LIMIT"), &limit);
+}
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+
+/// Enforce the per-owner registration rate limit.
+///
+/// Tracks the current window's start ledger and the number of registrations
+/// made within it in instance storage. When the window has elapsed, the
+/// counter is reset. Returns [`ContractError::RateLimitExceeded`] if the
+/// owner has already registered `RATE_LIMIT_COUNT` alerts in the current
+/// `RATE_LIMIT_WINDOW`-ledger window.
+pub fn check_and_record_registration(env: &Env, owner: &Address) -> Result<(), ContractError> {
+    let now = env.ledger().sequence();
+    let window_key = DataKey::RateWindowStart(owner.clone());
+    let count_key = DataKey::RateCount(owner.clone());
+
+    let window_start: u32 = env.storage().instance().get(&window_key).unwrap_or(0u32);
+    let mut count: u32 = env.storage().instance().get(&count_key).unwrap_or(0u32);
+
+    // Start a fresh window if none exists or the previous one has elapsed.
+    if window_start == 0 || now.saturating_sub(window_start) >= RATE_LIMIT_WINDOW {
+        env.storage().instance().set(&window_key, &now);
+        count = 0;
+    }
+
+    if count >= RATE_LIMIT_COUNT {
+        return Err(ContractError::RateLimitExceeded);
+    }
+
+    env.storage().instance().set(&count_key, &(count + 1));
+    Ok(())
 }
