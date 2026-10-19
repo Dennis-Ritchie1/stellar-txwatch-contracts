@@ -49,6 +49,23 @@ After running `scripts/deploy.sh`, replace the placeholder values with the print
 
 ---
 
+## Admin Keys
+
+`scripts/upgrade.sh` verifies the current on-chain admin key against this table before
+upgrading. Keep these in sync with the admin set at deploy time; a mismatch aborts the
+upgrade.
+
+| Network | Contract | Admin Address |
+|---|---|---|
+| Testnet | Alert Registry | `GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` |
+| Testnet | Watcher Registry | `GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` |
+| Mainnet | Alert Registry | `GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` |
+| Mainnet | Watcher Registry | `GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` |
+
+> Replace the `GXXX...` placeholders with the real admin public keys after each deploy.
+
+---
+
 ## How to Update This File
 
 1. Run the deploy script:

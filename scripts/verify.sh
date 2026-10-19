@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # scripts/verify.sh — Verify deployed contract WASM hash matches local build
 # Usage: ./scripts/verify.sh --contract alert-registry|watcher-registry --contract-id <ID> [--network testnet|mainnet]
+#
+# Examples:
+#   ./scripts/verify.sh --contract alert-registry --contract-id CABC... --network testnet
+#   ./scripts/verify.sh --contract watcher-registry --contract-id CXYZ... --network mainnet
+#
+# Exit codes:
+#   0  deployed WASM hash matches the local build
+#   1  mismatch, missing/invalid arguments, or verification error
 set -euo pipefail
 
 NETWORK="${NETWORK:-testnet}"
