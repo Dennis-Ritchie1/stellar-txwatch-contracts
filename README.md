@@ -59,6 +59,32 @@ environment — the idempotency check will skip those and retry only the remaini
 contracts. No on-chain rollback is required; a failed deploy leaves no contract
 behind, so re-running is safe.
 
+## Verifying a Deployment
+
+After deploying, run `scripts/verify.sh` to validate the deployed contract state.
+The script accepts a `--network` flag (`testnet` or `mainnet`) and exits `0` only
+if every check passes. It verifies:
+
+1. Both contracts are deployed and accessible.
+2. `AlertRegistry.get_admin` returns a valid address.
+3. `WatcherRegistry.get_admins` returns at least one address.
+4. A round-trip test: register an alert, retrieve it, then remove it.
+5. `is_authorized` returns `false` for a random address (registry is not compromised).
+6. The deployed WASM hash matches the expected value from `DEPLOYMENTS.md`.
+
+```bash
+# Verify a testnet deployment
+./scripts/verify.sh --network testnet
+
+# Verify a mainnet deployment
+./scripts/verify.sh --network mainnet
+```
+
+Each check prints a clear `PASS`/`FAIL` line so you can see exactly which checks
+succeeded and which failed. Contract IDs and the signing identity are read from
+the same environment variables used by `scripts/deploy.sh` (`ALERT_REGISTRY_ID`,
+`WATCHER_REGISTRY_ID`, `SOURCE`).
+
 ## TypeScript Bindings
 
 TypeScript bindings for the AlertRegistry contract are available on npm:
@@ -256,42 +282,4 @@ const registerTx = new TransactionBuilder(account2, {
 const preparedRegister = await server.prepareTransaction(registerTx);
 preparedRegister.sign(adminKeypair);
 await server.sendTransaction(preparedRegister);
-
-// Check if an address is an authorized watcher (read-only, no signature needed)
-const account3 = await server.getAccount(adminKeypair.publicKey());
-const checkTx = new TransactionBuilder(account3, {
-  fee: BASE_FEE,
-  networkPassphrase: Networks.TESTNET,
-})
-  .addOperation(
-    contract.call(
-      "is_authorized",
-      new Address("<WATCHER_NODE_ADDRESS>").toScVal(), // watcher
-    )
-  )
-  .setTimeout(30)
-  .build();
-
-const result = await server.simulateTransaction(checkTx);
-console.log("Is authorized:", result.result?.retval); // SCV_BOOL
 ```
-
-### Invoking Contracts (Rust SDK)
-
-```rust
-use soroban_sdk::{Address, Env, String, Vec};
-
-// In a cross-contract call context:
-let alert_registry = AlertRegistryClient::new(&env, &alert_registry_id);
-let config_id = alert_registry.register_alert(
-    &owner,
-    &target_contract,
-    &String::from_str(&env, "My Alert"),
-    &String::from_str(&env, "<webhook-hash>"),
-    &rules,
-);
-```
-
-> **Re-entrancy safety:** Soroban executes contract calls atomically and prevents classic callback-based re-entrancy within the same transaction. The registry contracts only mutate local storage after `require_auth()` succeeds, and they do not invoke exter
-
-/* … truncated 1882 chars — edit only what you need near the top … */
