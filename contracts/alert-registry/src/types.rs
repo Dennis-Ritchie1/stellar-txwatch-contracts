@@ -29,7 +29,15 @@ pub enum ContractError {
     DuplicateAlertId = 10,
     /// Returned when an owner exceeds [`RATE_LIMIT_COUNT`] registrations
     /// within [`RATE_LIMIT_WINDOW`] ledgers.
-    RateLimitExceeded = 11,}
+    RateLimitExceeded = 11,
+    /// Returned when the alert ID counter would overflow `u64`.
+    ///
+    /// The counter starts at 0 and increments by one per registration. In
+    /// release builds integer overflow wraps silently, so at `u64::MAX` the
+    /// next increment would wrap to 0 and overwrite alert ID 0. `next_id`
+    /// uses `checked_add` and returns this error instead of wrapping.
+    CounterOverflow = 14,
+}
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 

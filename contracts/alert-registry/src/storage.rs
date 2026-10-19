@@ -240,11 +240,33 @@ pub fn set_limit(env: &Env, limit: u32) {
 /// Enforce the per-owner registration rate limit.
 ///
 /// Tracks the current window's start ledger and the number of registrations
-/// made within it in instance storage. When the window has elapsed, the
-/// counter is reset. Returns [`ContractError::RateLimitExceeded`] if the
-/// owner has already registered `RATE_LIMIT_COUNT` alerts in the current
-/// `RATE_LIMIT_WINDOW`-ledger window.
-pub fn check_and_record_registration(env: &Env, owner: &Address) -> Result<(), ContractError> {
-    let now = env.ledger()
+/// made within it. Once `RATE_LIMIT_COUNT` registrations have occurred inside
+/// a `RATE_LIMIT_WINDOW`-ledger window, further registrations are rejected
+/// with [`ContractError::RateLimitExceeded`] until the window rolls over.
+pub fn check_rate_limit(env: &Env, owner: &Address) -> Result<(), ContractError> {
+    let now = env.ledger().sequence();
+    let key = DataKey::RateLimit(owner.clone());
+    let (window_start, count): (u32, u32) = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or((now, 0u32));
 
-/* … truncated 714 chars — edit only what you need near the top … */
+    if now.saturating_sub(window_start) >= RATE_LIMIT_WINDOW {
+        env.storage().persistent().set(&key, &(now, 1u32));
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, DEFAULT_TTL, DEFAULT_TTL);
+        return Ok(());
+    }
+
+    if count >= RATE_LIMIT_COUNT {
+        return Err(ContractError::RateLimitExceeded);
+    }
+
+    env.storage().persistent().set(&key, &(window_start, count + 1));
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, DEFAULT_TTL, DEFAULT_TTL);
+    Ok(())
+}
