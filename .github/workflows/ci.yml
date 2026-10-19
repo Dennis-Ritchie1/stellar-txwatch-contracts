@@ -13,9 +13,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Issue #318 — rely on rust-toolchain.toml for the pinned toolchain,
+      # targets, and components so CI matches local builds.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
 

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Bumped the pinned Rust toolchain in `rust-toolchain.toml` to a recent stable
+  release and declared the `wasm32-unknown-unknown` target so CI and local builds
+  get the WASM target automatically (#318).
+
 ### Added
 - **Feature A — `watcher.remove` event**: `WatcherRegistry::remove_watcher` now emits
   `(Symbol("watcher"), Symbol("remove"))` with `data = watcher: Address` **only when the
