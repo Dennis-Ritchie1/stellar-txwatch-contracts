@@ -54,6 +54,16 @@ bash scripts/deploy.sh
 4. Run `cargo test` to confirm everything passes.
 5. Update the relevant doc in `docs/`.
 
+## Architecture Decision Records
+
+Significant design changes require a new Architecture Decision Record (ADR).
+This includes changes to storage tiers, authorization models, multi-step
+flows, or any decision a future contributor would otherwise have to ask about.
+
+ADRs live in [`docs/adr/`](docs/adr/) and follow the Status / Context /
+Decision / Consequences format described there. Add a new numbered ADR and
+link it from the index in `docs/adr/README.md`.
+
 ## Sister Repos
 
 - **Core engine:** https://github.com/Tx-wat/stellar-txwatch-core
