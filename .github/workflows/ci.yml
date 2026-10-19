@@ -37,9 +37,9 @@ jobs:
       - name: Test
         run: cargo test
 
-      # Issue #100 — Clippy lint check
+      # Issue #100 / #289 — Clippy lint check (deny warnings)
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       # Issue #101 — Formatting check
       - name: Format check
