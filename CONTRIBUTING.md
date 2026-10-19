@@ -58,6 +58,24 @@ bash scripts/deploy.sh
 4. Run `cargo fmt` and `cargo test` to confirm everything passes.
 5. Update the relevant doc in `docs/`.
 
+## Release Process
+
+Releases are automated via `.github/workflows/release.yml`.
+
+1. Move the relevant entries in `CHANGELOG.md` into the `[Unreleased]` section and commit them to `main`.
+2. Tag the release and push the tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+3. The `release.yml` workflow triggers on tags matching `v*.*.*` and will:
+   - Extract the `[Unreleased]` section from `CHANGELOG.md` as the release body.
+   - Create a GitHub Release for the tag with those notes.
+   - Trigger the `publish-bindings` workflow to publish new npm packages.
+   - Trigger the `publish-abis` workflow to upload WASM artifacts.
+
 ## Sister Repos
 
 - **Core engine:** https://github.com/Tx-wat/stellar-txwatch-core
