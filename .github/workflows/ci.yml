@@ -29,6 +29,10 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      # Issue #101 — Formatting check
+      - name: Format check
+        run: cargo fmt --all -- --check
+
       # Issue #99 — WASM build verification
       - name: Build (WASM)
         run: cargo build --release --target wasm32-unknown-unknown
@@ -40,10 +44,6 @@ jobs:
       # Issue #100 — Clippy lint check
       - name: Clippy
         run: cargo clippy -- -D warnings
-
-      # Issue #101 — Formatting check
-      - name: Format check
-        run: cargo fmt --check
 
       # Issue #105 — Dependency vulnerability scanning
       - name: Install cargo-audit
