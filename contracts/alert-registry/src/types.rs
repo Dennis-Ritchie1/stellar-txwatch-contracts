@@ -17,7 +17,11 @@ pub enum ContractError {
     TooManyRules = 7,
     InvalidRuleDescriptor = 8,
     OwnerAlertLimitExceeded = 9,
-    DuplicateAlertId = 10,}
+    DuplicateAlertId = 10,
+    /// Returned when `transfer_admin` is called with the current admin as
+    /// `new_admin`, which would otherwise be a silent no-op.
+    InvalidAdminAddress = 15,
+}
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
