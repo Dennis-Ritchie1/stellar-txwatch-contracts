@@ -9,19 +9,24 @@ use crate::{DEFAULT_TTL, RATE_LIMIT_COUNT, RATE_LIMIT_WINDOW};
 ///
 /// Returns the current value before incrementing, so the first ID is `0`.
 /// Stored in persistent storage so it survives instance TTL expiry.
-pub fn next_id(env: &Env) -> u64 {
+///
+/// The counter is monotonic and non-reusable: IDs are never recycled, even
+/// after an alert is removed. If the counter is already at `u64::MAX`, the
+/// increment would overflow (wrapping to `0` and overwriting alert ID `0` in
+/// release builds), so this returns [`ContractError::CounterOverflow`]
+/// instead of wrapping.
+pub fn next_id(env: &Env) -> Result<u64, ContractError> {
     let id: u64 = env
         .storage()
         .persistent()
         .get(&DataKey::NextId)
         .unwrap_or(0u64);
-    env.storage()
-        .persistent()
-        .set(&DataKey::NextId, &(id + 1));
+    let next = id.checked_add(1).ok_or(ContractError::CounterOverflow)?;
+    env.storage().persistent().set(&DataKey::NextId, &next);
     env.storage()
         .persistent()
         .extend_ttl(&DataKey::NextId, 100, 100);
-    id
+    Ok(id)
 }
 
 // ── Alert CRUD ────────────────────────────────────────────────────────────────
@@ -240,23 +245,6 @@ pub fn set_limit(env: &Env, limit: u32) {
 /// owner has already registered `RATE_LIMIT_COUNT` alerts in the current
 /// `RATE_LIMIT_WINDOW`-ledger window.
 pub fn check_and_record_registration(env: &Env, owner: &Address) -> Result<(), ContractError> {
-    let now = env.ledger().sequence();
-    let window_key = DataKey::RateWindowStart(owner.clone());
-    let count_key = DataKey::RateCount(owner.clone());
+    let now = env.ledger()
 
-    let window_start: u32 = env.storage().instance().get(&window_key).unwrap_or(0u32);
-    let mut count: u32 = env.storage().instance().get(&count_key).unwrap_or(0u32);
-
-    // Start a fresh window if none exists or the previous one has elapsed.
-    if window_start == 0 || now.saturating_sub(window_start) >= RATE_LIMIT_WINDOW {
-        env.storage().instance().set(&window_key, &now);
-        count = 0;
-    }
-
-    if count >= RATE_LIMIT_COUNT {
-        return Err(ContractError::RateLimitExceeded);
-    }
-
-    env.storage().instance().set(&count_key, &(count + 1));
-    Ok(())
-}
+/* … truncated 714 chars — edit only what you need near the top … */
