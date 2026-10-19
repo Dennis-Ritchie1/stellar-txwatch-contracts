@@ -1,27 +1,25 @@
-<!-- Please provide a short description of the changes in this PR. -->
+## Summary
 
-## Description
-- What changed and why.
+<!-- Describe the change and the motivation behind it. -->
 
-## Related Issue
-- Link any related issue(s) prefixed with `#`.
+## Contract Changes
 
-## Type of change
-- Bugfix
-- New feature
-- Docs update
-- Chore
+- [ ] Unit tests added/updated for changed functions
+- [ ] Integration tests added if cross-contract behavior changed
+- [ ] CHANGELOG.md updated under [Unreleased]
+- [ ] docs/alert-registry.md or docs/watcher-registry.md updated
+- [ ] docs/events.md updated if events were added/changed
+- [ ] TypeScript bindings regenerated if function signatures changed
+- [ ] No new clippy warnings introduced
+- [ ] Auth requirements verified (`require_auth()` present on all mutating functions)
+- [ ] `ContractError` variants documented in rustdoc
 
 ## Checklist
-- [ ] My code follows the repository style
-- [ ] I have added relevant tests (unit / integration)
-- [ ] I have updated or added documentation if necessary
-- [ ] All CI checks pass
 
-## Testing notes
-- How to run tests or manual verification steps
+- [ ] `cargo test` passes locally
+- [ ] Relevant docs in `docs/` updated
+- [ ] `DEPLOYMENTS.md` updated if contract addresses changed
 
-## Release notes / changelog
-- Short note for changelog if this should be documented for release.
+## Related Issues
 
-If you'd like help polishing this PR or splitting into smaller changes, ask maintainers.
+<!-- e.g. Closes #123 -->
