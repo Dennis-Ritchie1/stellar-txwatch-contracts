@@ -45,6 +45,10 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -D warnings
 
+      # Issue #291 — Rustdoc link check
+      - name: Docs
+        run: RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --all-features
+
       # Issue #105 — Dependency vulnerability scanning
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
