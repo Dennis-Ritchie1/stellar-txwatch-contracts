@@ -339,3 +339,6 @@ MIT
 
 <!-- handsoff-issue-307 -->
 - #307: refactor: replace validate_rules string comparisons with a const rule set for extensibility
+
+<!-- handsoff-issue-308 -->
+- #308: refactor: change remove_alert_record helper to return Result for consistent error handling
