@@ -184,6 +184,8 @@ impl AlertRegistry {
         admin.require_auth();
         Self::assert_admin(&env, &admin)?;
         env.storage().instance().set(&symbol_short!("LIMIT"), &limit);
+        // Record every limit change on-chain, so the audit trail shows it (#248).
+        env.events().publish((symbol_short!("admin"), symbol_short!("limit")), (admin, limit));
         Ok(())
     }
 
