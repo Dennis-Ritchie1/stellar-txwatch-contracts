@@ -119,6 +119,22 @@ Transfers the admin role to a new address.
 
 ---
 
+### `is_admin`
+
+Checks whether a given address is currently an admin of the registry.
+
+Read-only, no authorization required.
+
+**Parameters**
+
+| Name | Type | Description |
+|---|---|---|
+| `address` | `Address` | Address to check |
+
+**Returns:** `bool` — `true` if the address is a registered admin, `false` otherwise (including if uninitialized).
+
+---
+
 ### `get_admin`
 
 Returns the current admin address.
