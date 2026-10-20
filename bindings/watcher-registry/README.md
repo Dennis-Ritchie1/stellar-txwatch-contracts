@@ -69,6 +69,7 @@ class. The method signatures mirror the Soroban contract interface exactly.
 | `transfer_admin(admin, new_admin)` | `admin` | Replace the entire admin set |
 | `get_admins()` | — | Return all current admin addresses |
 | `get_admin()` | — | Return the primary admin address |
+| `is_admin(address)` | — | Check if an address is an admin (returns false if uninitialized) |
 
 ## Network addresses
 
