@@ -498,6 +498,8 @@ impl AlertRegistry {
         config_id: u64,
         ttl: u32,
     ) -> Result<(), ContractError> {
+        // Extends all four related entries, so the owner index cannot expire while the alert
+        // is still live and make it disappear from `get_alerts_by_owner` (#254).
         // Clamp the requested TTL to the protocol maximum.
         let effective_ttl = ttl.min(MAX_TTL);
 
