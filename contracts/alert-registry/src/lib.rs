@@ -162,6 +162,8 @@ impl AlertRegistry {
         admin.require_auth();
         Self::assert_admin(&env, &admin)?;
         env.storage().instance().set(&symbol_short!("ADMIN"), &new_admin);
+        // Record the handover with both addresses, so the audit trail shows who ceded admin (#247).
+        env.events().publish((symbol_short!("admin"), symbol_short!("transfer")), (admin, new_admin));
         Ok(())
     }
 

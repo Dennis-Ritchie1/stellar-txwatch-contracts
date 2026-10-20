@@ -113,7 +113,7 @@ Emitted when the admin role is transferred to a new address.
 | Topic 1 | `Symbol("transfer")` |
 | Data | `(old_admin: Address, new_admin: Address)` |
 
-**Status:** 🔲 planned (`transfer_admin`)
+**Status:** ✅ implemented (`transfer_admin`)
 
 ---
 
