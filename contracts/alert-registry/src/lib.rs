@@ -68,6 +68,9 @@ pub enum ContractError {
     InvalidRuleDescriptor = 9,
     OwnerAlertLimitExceeded = 10,
     DuplicateAlertId = 11,
+    /// A storage write failed, for example because an entry exceeds the protocol size limit.
+    /// Returned as a typed error so callers can tell storage saturation from a bug (#251).
+    StorageError = 13,
 }
 
 // ── Data types ───────────────────────────────────────────────────────────────
