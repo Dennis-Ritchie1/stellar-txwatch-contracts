@@ -146,3 +146,55 @@ All state is stored in **instance storage**:
 This contract is safe to call from other Soroban contracts. Soroban executes contract calls atomically and does not allow classic callback-style re-entrancy into the same contract within the same transaction.
 
 All mutating entrypoints in `WatcherRegistry` require `admin.require_auth()` before updating storage, and no state-changing operation performs external callbacks. This makes the registry resistant to standard cross-contract re-entrancy attacks.
+
+## Additional functions
+
+### `add_admin`
+
+```text
+add_admin(env, caller: Address, new_admin: Address) -> Result<(), ContractError>
+```
+
+Adds `new_admin` to the admin set. `caller` must be an admin (`Unauthorized` otherwise). Adding an
+existing admin changes nothing. Emits `("admin", "add")` with `(caller, new_admin)`.
+
+### `remove_admin`
+
+```text
+remove_admin(env, caller: Address, target_admin: Address) -> Result<(), ContractError>
+```
+
+Removes `target_admin`. Refused with `LastAdmin` when it would leave the set empty. Emits
+`("admin", "remove")`.
+
+### `replace_watcher`
+
+```text
+replace_watcher(env, admin: Address, old_watcher: Address, new_watcher: Address) -> Result<(), ContractError>
+```
+
+Swaps one watcher for another in one call. `admin` must be an admin.
+
+### `is_authorized`
+
+```text
+is_authorized(env, watcher: Address) -> bool
+```
+
+Returns `true` only for a registered watcher. The `AlertRegistry` gate calls this.
+
+### `clear_all_watchers`
+
+```text
+clear_all_watchers(env, admin: Address) -> Result<(), ContractError>
+```
+
+Removes every watcher. Emits one `("watcher", "remove")` event per watcher.
+
+### `get_admins`
+
+```text
+get_admins(env) -> Result<Vec<Address>, ContractError>
+```
+
+Returns the admin set. Read-only.
