@@ -393,6 +393,24 @@ impl WatcherRegistry {
     ///
     /// Kept for backwards compatibility. Prefer [`get_admins`] when you need
     /// the full admin set.
+    /// Check whether a given address is an admin of the registry.
+    ///
+    /// Returns `false` (not an error) if the contract has not been initialized.
+    /// Read-only entrypoint, requires no authorization.
+    #[must_use]
+    pub fn is_admin(env: Env, address: Address) -> bool {
+        if !env.storage().instance().has(&DataKey::Admins) {
+            return false;
+        }
+        let admins = Self::load_admins(&env);
+        for i in 0..admins.len() {
+            if admins.get(i).unwrap() == address {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn get_admin(env: Env) -> Result<Address, ContractError> {
         let admins = Self::get_admins(env)?;
         // load_admins guarantees at least one entry after initialization
@@ -1053,5 +1071,35 @@ mod tests {
 
         // At least two events emitted (remove + replace)
         assert!(env.events().all().len() >= 2);
+    }
+    // 31. is_admin returns true for registered admins, false for non-admins, and false when uninitialized
+    #[test]
+    fn test_is_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(WatcherRegistry, ());
+        let client = WatcherRegistryClient::new(&env, &contract_id);
+
+        let admin1 = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+
+        // Before initialization, is_admin returns false without error
+        assert!(!client.is_admin(&admin1));
+        assert!(!client.is_admin(&admin2));
+        assert!(!client.is_admin(&non_admin));
+
+        // Initialize with admin1
+        client.initialize(&admin1);
+
+        // Add admin2 to verify multi-admin set
+        client.add_admin(&admin1, &admin2);
+
+        // Verify each admin returns true
+        assert!(client.is_admin(&admin1));
+        assert!(client.is_admin(&admin2));
+
+        // Verify non-admin returns false
+        assert!(!client.is_admin(&non_admin));
     }
 }
