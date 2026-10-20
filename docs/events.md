@@ -99,7 +99,7 @@ Emitted when the admin role is first initialised.
 | Topic 1 | `Symbol("init")` |
 | Data | `(admin: Address)` |
 
-**Status:** 🔲 planned (`initialize`)
+**Status:** ✅ implemented (`initialize`)
 
 ---
 

@@ -148,6 +148,8 @@ impl AlertRegistry {
             return Err(ContractError::AlreadyInitialized);
         }
         env.storage().instance().set(&symbol_short!("ADMIN"), &admin);
+        // Emit the admin.init event on first initialisation only (#246).
+        env.events().publish((symbol_short!("admin"), symbol_short!("init")), admin);
         Ok(())
     }
 
