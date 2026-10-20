@@ -19,6 +19,9 @@ pub enum _InvalidWebhookHashContractError {
 mod contract_tests;
 
 #[cfg(test)]
+mod count_consistency_tests;
+
+#[cfg(test)]
 mod upgrade_roundtrip_tests;
 
 // ── TTL constants ─────────────────────────────────────────────────────────────
