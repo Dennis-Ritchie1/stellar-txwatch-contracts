@@ -18,6 +18,9 @@ pub enum _InvalidWebhookHashContractError {
 #[path = "tests.rs"]
 mod contract_tests;
 
+#[cfg(test)]
+mod auth_required_tests;
+
 // ── TTL constants ─────────────────────────────────────────────────────────────
 
 /// Default TTL applied to persistent storage entries on every write.
