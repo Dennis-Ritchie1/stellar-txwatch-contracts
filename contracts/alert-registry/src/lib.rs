@@ -22,9 +22,9 @@ mod contract_tests;
 
 /// Default TTL applied to persistent storage entries on every write.
 ///
-/// Approximately 24 hours at the nominal 5-second ledger close time.
+/// Approximately 7 days at the nominal 5-second ledger close time (#249).
 /// See `docs/ttl.md` for the full rationale.
-pub const DEFAULT_TTL: u32 = 17_280;
+pub const DEFAULT_TTL: u32 = 120_960;
 
 /// Protocol-enforced upper bound on caller-specified TTL values.
 ///
@@ -75,7 +75,7 @@ pub enum ContractError {
 /// On-chain configuration for a single alert.
 ///
 /// Stored under [`DataKey::Alert`] with a default TTL of [`DEFAULT_TTL`] ledgers
-/// (~24 hours). Use [`AlertRegistry::bump_alert`] to extend up to [`MAX_TTL`].
+/// (~7 days). Use [`AlertRegistry::bump_alert`] to extend up to [`MAX_TTL`].
 /// See `docs/ttl.md` for expiry details.
 #[contracttype]
 #[derive(Clone)]
@@ -117,7 +117,7 @@ pub struct AlertConfig {
 /// functions behave as before.
 ///
 /// # Storage and TTL
-/// All persistent entries are extended by [`DEFAULT_TTL`] ledgers (~24 hours) on every
+/// All persistent entries are extended by [`DEFAULT_TTL`] ledgers (~7 days) on every
 /// write. Callers can extend any alert up to [`MAX_TTL`] ledgers (~31 days) via
 /// [`bump_alert`]. See `docs/ttl.md` for full details.
 #[contract]
