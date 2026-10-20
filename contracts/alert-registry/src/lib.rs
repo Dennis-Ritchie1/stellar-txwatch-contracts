@@ -606,7 +606,13 @@ impl AlertRegistry {
     ///
     /// Returns `None` if the alert does not exist or has expired.
     pub fn get_alert(env: Env, config_id: u64) -> Option<AlertConfig> {
-        env.storage().persistent().get(&DataKey::Alert(config_id))
+        let key = DataKey::Alert(config_id);
+        let cfg: Option<AlertConfig> = env.storage().persistent().get(&key);
+        if cfg.is_some() {
+            // A read keeps an alert that is only ever read from archiving (#250).
+            env.storage().persistent().extend_ttl(&key, DEFAULT_TTL, DEFAULT_TTL);
+        }
+        cfg
     }
 
     /// Read the `active` flag of an alert without deserializing the full config.
