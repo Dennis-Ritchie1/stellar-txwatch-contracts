@@ -1,7 +1,6 @@
 //! One test per `ContractError` variant that the compiled `AlertRegistry` can return (#259).
 //!
-//! `DuplicateAlertId` and `NoPendingWebhook` are not covered: the compiled `lib.rs` has no
-//! webhook propose/confirm flow, and duplicate IDs cannot be produced through the public API.
+//! `DuplicateAlertId` is not covered: duplicate IDs cannot be produced through the public API.
 
 #![cfg(test)]
 

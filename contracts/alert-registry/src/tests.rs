@@ -899,3 +899,239 @@ fn test_counter_overflow_guard() {
 
     assert_eq!(res.unwrap_err().unwrap(), ContractError::CounterOverflow);
 }
+
+// ── Tests for issues #202, #203, #204, #205 ───────────────────────────────────
+
+// #202 — get_alert_count reads the same key as next_id() (instance "NEXT_ID").
+// Registers N alerts and asserts get_alert_count == N; removing alerts must not
+// decrement the counter (it is monotonic).
+#[test]
+fn test_202_get_alert_count_matches_registered_count() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    let hash = str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+    assert_eq!(client.get_alert_count(), 0u64, "#202: count must start at 0");
+
+    let id0 = client.register_alert(&owner, &target, &str(&env, "A"), &hash, &vec![&env]);
+    assert_eq!(client.get_alert_count(), 1u64, "#202: count must be 1 after first register");
+
+    client.register_alert(&owner, &target, &str(&env, "B"), &hash, &vec![&env]);
+    assert_eq!(client.get_alert_count(), 2u64, "#202: count must be 2 after second register");
+
+    client.register_alert(&owner, &target, &str(&env, "C"), &hash, &vec![&env]);
+    assert_eq!(client.get_alert_count(), 3u64, "#202: count must be 3 after third register");
+
+    // Removing an alert must NOT decrement the monotonic counter.
+    client.remove_alert(&owner, &id0);
+    assert_eq!(client.get_alert_count(), 3u64, "#202: monotonic counter must not decrease after remove");
+}
+
+// #203 — removing the last alert owned by an address must delete OwnerIndex,
+// not leave an empty vec in storage.
+#[test]
+fn test_203_owner_index_deleted_when_last_alert_removed() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    let hash = str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+    let id = client.register_alert(&owner, &target, &str(&env, "Only"), &hash, &vec![&env]);
+    // Sanity: owner has one alert.
+    assert_eq!(client.get_active_alert_count(&owner), 1u32);
+
+    client.remove_alert(&owner, &id);
+
+    // After removal the OwnerIndex key must not exist in storage (#203).
+    let key_present = env
+        .storage()
+        .persistent()
+        .has(&DataKey::OwnerIndex(owner.clone()));
+    assert!(!key_present, "#203: OwnerIndex must be deleted when the last alert is removed");
+}
+
+// #203 — removing the last alert watching a contract must delete ContractIndex,
+// not leave an empty vec in storage.
+#[test]
+fn test_203_contract_index_deleted_when_last_alert_removed() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    let hash = str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+    let id = client.register_alert(&owner, &target, &str(&env, "Only"), &hash, &vec![&env]);
+    // Sanity: contract has one alert.
+    assert_eq!(client.get_alert_count_for_contract(&target), 1u32);
+
+    client.remove_alert(&owner, &id);
+
+    // After removal the ContractIndex key must not exist in storage (#203).
+    let key_present = env
+        .storage()
+        .persistent()
+        .has(&DataKey::ContractIndex(target.clone()));
+    assert!(!key_present, "#203: ContractIndex must be deleted when the last alert is removed");
+}
+
+// #203 — partial removal (owner still has remaining alerts) must keep the index.
+#[test]
+fn test_203_index_kept_when_alerts_remain() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    let hash = str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+    let id1 = client.register_alert(&owner, &target, &str(&env, "First"), &hash, &vec![&env]);
+    client.register_alert(&owner, &target, &str(&env, "Second"), &hash, &vec![&env]);
+
+    client.remove_alert(&owner, &id1);
+
+    // One alert remains — index must still be present.
+    let key_present = env
+        .storage()
+        .persistent()
+        .has(&DataKey::OwnerIndex(owner.clone()));
+    assert!(key_present, "#203: OwnerIndex must stay when alerts remain");
+    assert_eq!(client.get_active_alert_count(&owner), 1u32);
+}
+
+// #204 — confirm_webhook must emit (Symbol("alert"), Symbol("webhook")) — not wh_conf.
+#[test]
+fn test_204_confirm_webhook_emits_correct_event() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let id = client.register_alert(
+        &owner,
+        &target,
+        &str(&env, "Alert"),
+        &str(&env, "old-hash"),
+        &vec![&env],
+    );
+
+    client.propose_webhook(&owner, &id, &str(&env, "new-hash")).unwrap();
+    client.confirm_webhook(&owner, &id).unwrap();
+
+    // Verify that an event with topics ("alert", "webhook") was emitted.
+    let want_a = soroban_sdk::Symbol::new(&env, "alert");
+    let want_b = soroban_sdk::Symbol::new(&env, "webhook");
+    let found = env.events().all().iter().any(|(_contract, topics, _data)| {
+        use soroban_sdk::TryFromVal;
+        topics.len() == 2
+            && soroban_sdk::Symbol::try_from_val(&env, &topics.get(0).unwrap()).ok() == Some(want_a.clone())
+            && soroban_sdk::Symbol::try_from_val(&env, &topics.get(1).unwrap()).ok() == Some(want_b.clone())
+    });
+    assert!(found, "#204: confirm_webhook must emit (alert, webhook) — not (alert, wh_conf)");
+}
+
+// #204 — confirm_webhook promotes pending to live and clears pending.
+#[test]
+fn test_204_confirm_webhook_promotes_pending_hash() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let id = client.register_alert(
+        &owner,
+        &target,
+        &str(&env, "Alert"),
+        &str(&env, "original"),
+        &vec![&env],
+    );
+
+    client.propose_webhook(&owner, &id, &str(&env, "rotated")).unwrap();
+    client.confirm_webhook(&owner, &id).unwrap();
+
+    let cfg = client.get_alert(&id).unwrap();
+    assert_eq!(cfg.webhook_hash, str(&env, "rotated"), "#204: live hash must be promoted");
+    assert!(cfg.pending_webhook_hash.is_none(), "#204: pending hash must be cleared after confirm");
+}
+
+// #204 — confirm_webhook with no pending hash returns NoPendingWebhook.
+#[test]
+fn test_204_confirm_webhook_no_pending_returns_error() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let id = client.register_alert(
+        &owner,
+        &target,
+        &str(&env, "Alert"),
+        &str(&env, "hash"),
+        &vec![&env],
+    );
+
+    let result = client.try_confirm_webhook(&owner, &id);
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        ContractError::NoPendingWebhook,
+        "#204: must return NoPendingWebhook when no rotation is in progress"
+    );
+}
+
+// #205 — stale/expired IDs are pruned from the owner index during limit check.
+// Simulates expiry by manually removing the Alert entry from storage, then
+// verifies the owner can register a new alert without hitting the limit.
+#[test]
+fn test_205_stale_ids_pruned_from_owner_index_during_limit_check() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    let hash = str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+    client.initialize(&admin);
+    // Limit of 1: owner may only have 1 live alert at a time.
+    client.set_per_owner_alert_limit(&admin, &1u32);
+
+    let id = client.register_alert(&owner, &target, &str(&env, "First"), &hash, &vec![&env]);
+
+    // Simulate TTL expiry by directly removing the Alert entry from persistent storage,
+    // while leaving the OwnerIndex intact (as would happen on ledger archival).
+    env.storage().persistent().remove(&DataKey::Alert(id));
+
+    // The index still contains the stale ID, but the alert is gone.
+    // assert_per_owner_limit must prune it and allow the new registration.
+    let result = client.try_register_alert(
+        &owner,
+        &target,
+        &str(&env, "Second"),
+        &hash,
+        &vec![&env],
+    );
+    assert!(result.is_ok(), "#205: registration must succeed after stale IDs are pruned from owner index");
+}
+
+// #205 — after pruning, the owner index should only contain live IDs.
+#[test]
+fn test_205_index_is_compacted_after_stale_prune() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    let hash = str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+    client.initialize(&admin);
+    client.set_per_owner_alert_limit(&admin, &3u32);
+
+    // Register 2 alerts.
+    let id0 = client.register_alert(&owner, &target, &str(&env, "A"), &hash, &vec![&env]);
+    let id1 = client.register_alert(&owner, &target, &str(&env, "B"), &hash, &vec![&env]);
+
+    // Simulate expiry of both.
+    env.storage().persistent().remove(&DataKey::Alert(id0));
+    env.storage().persistent().remove(&DataKey::Alert(id1));
+
+    // Register a new alert — this triggers pruning of the 2 stale IDs.
+    client.register_alert(&owner, &target, &str(&env, "C"), &hash, &vec![&env]);
+
+    // Active count must now be exactly 1 (the new alert).
+    assert_eq!(
+        client.get_active_alert_count(&owner),
+        1u32,
+        "#205: after pruning, only 1 live alert must remain"
+    );
+}

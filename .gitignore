@@ -6,6 +6,14 @@ Cargo.lock
 
 # Soroban test snapshots
 **/test_snapshots/
+**/__snapshots__/
+
+# Coverage artefacts
+lcov.info
+*.profraw
+*.profdata
+coverage/
+llvm-cov-target/
 
 # IDE / editor
 .vscode/
@@ -14,6 +22,7 @@ Cargo.lock
 *.swp
 *.swo
 .DS_Store
+*.orig
 
 # Generated ABI output (local runs)
 abi/
@@ -25,3 +34,11 @@ abi/
 .env
 .env.*
 !.env.example
+
+# Node / TypeScript build output (bindings)
+node_modules/
+dist/
+*.tsbuildinfo
+
+# OS artefacts
+Thumbs.db
