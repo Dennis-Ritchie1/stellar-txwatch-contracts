@@ -469,7 +469,7 @@ impl WatcherRegistry {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod watcher_stress_tests;
+mod watcher_tests;
 
 #[cfg(test)]
 mod tests {

@@ -1,5 +1,7 @@
 # stellar-txwatch-contracts
 
+[![codecov](https://codecov.io/gh/Tx-wat/stellar-txwatch-contracts/branch/main/graph/badge.svg)](https://codecov.io/gh/Tx-wat/stellar-txwatch-contracts)
+
 Soroban smart contracts for on-chain alert configuration storage and watcher registry.  
 Part of the [Tx-wat](https://github.com/Tx-wat) organization.
 
@@ -10,6 +12,26 @@ Part of the [Tx-wat](https://github.com/Tx-wat) organization.
 | [Alert Registry](contracts/alert-registry/src/lib.rs) | Stores alert configs on-chain keyed by contract address |
 | [Watcher Registry](contracts/watcher-registry/src/lib.rs) | Stores authorized watcher node addresses |
 
+## WASM Size Budget
+
+CI enforces a hard size budget of **200 KB (204800 bytes)** per contract WASM binary
+(see [.github/workflows/wasm-size-check.yml](.github/workflows/wasm-size-check.yml)).
+The build fails if any binary exceeds this threshold.
+
+Current WASM sizes (reference — update after significant changes):
+
+| Contract | WASM binary | Budget |
+|---|---|---|
+| Alert Registry | `alert_registry.wasm` | 200 KB |
+| Watcher Registry | `watcher_registry.wasm` | 200 KB |
+
+To check sizes locally after building:
+
+```bash
+cargo build --release --target wasm32-unknown-unknown
+ls -l target/wasm32-unknown-unknown/release/*.wasm
+```
+
 ## Quick Start
 
 ```bash
@@ -18,14 +40,67 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add wasm32-unknown-unknown
 
 # Build
-cargo build --release --target wasm32-unknown-unknown
+make build
 
 # Test
-cargo test
+make test
+
+# Lint
+make lint
+
+# Lint (warnings are errors)
+cargo clippy --all-targets --all-features -- -D warnings
 
 # Generate TypeScript bindings
 make bindings
+
+# See all available targets
+make help
 ```
+
+## Deploying Contracts
+
+Use `scripts/deploy.sh` to deploy both contracts to a target network. The script is
+idempotent: if a contract is already deployed it skips the upload/deploy step and
+runs a post-deploy health check to confirm the contract is callable.
+
+Required environment variables (documented at the top of the script):
+
+| Variable | Description |
+|---|---|
+| `NETWORK` | Target network: `testnet` or `mainnet` |
+| `SOURCE` | Stellar CLI identity used to sign the deploy |
+| `ALERT_REGISTRY_ID` | Existing AlertRegistry contract ID (optional; enables idempotency check) |
+| `WATCHER_REGISTRY_ID` | Existing WatcherRegistry contract ID (optional; enables idempotency check) |
+
+```bash
+# Deploy to testnet
+NETWORK=testnet SOURCE=my-identity ./scripts/deploy.sh
+
+# Re-run against an existing deployment (skips upload, verifies health)
+NETWORK=testnet SOURCE=my-identity \
+  ALERT_REGISTRY_ID=<ALERT_REGISTRY_CONTRACT_ID> \
+  WATCHER_REGISTRY_ID=<WATCHER_REGISTRY_CONTRACT_ID> \
+  ./scripts/deploy.sh
+```
+
+## Test Coverage
+
+CI measures test coverage with [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and uploads the report to [Codecov](https://codecov.io/gh/Tx-wat/stellar-txwatch-contracts). The build fails if overall coverage drops below 80%.
+
+```bash
+# Install and run locally
+cargo install cargo-llvm-cov
+cargo llvm-cov --all-features --lcov --output-path lcov.info
+```
+
+Coverage targets:
+
+| Crate | Target |
+|---|---|
+| alert-registry | >= 90% |
+| watcher-registry | >= 90% |
+| integration-tests | >= 80% |
 
 ## TypeScript Bindings
 
@@ -260,74 +335,4 @@ let config_id = alert_registry.register_alert(
 );
 ```
 
-> **Re-entrancy safety:** Soroban executes contract calls atomically and prevents classic callback-based re-entrancy within the same transaction. The registry contracts only mutate local storage after `require_auth()` succeeds, and they do not invoke external contracts during state updates.
-
-### Auth Flow
-
-All mutating functions require Stellar auth signatures:
-
-```
-Owner signs → register_alert / update_alert / remove_alert
-Admin signs → register_watcher / remove_watcher / transfer_admin
-```
-
-Stellar's `require_auth()` enforces this at the protocol level — no custom signature verification needed.
-
-### Event Indexing (planned)
-
-Contracts emit no custom events yet. Watchers poll via Horizon's transaction endpoint:
-
-```
-GET https://horizon-testnet.stellar.org/accounts/<CONTRACT_ID>/transactions
-```
-
-Future versions will emit `soroban_sdk::events` for real-time indexing.
-
-## TypeScript Bindings
-
-TypeScript bindings for `WatcherRegistry` are published to npm and generated
-automatically from the compiled WASM on every release using
-`stellar contract bindings typescript`.
-
-```bash
-npm install @tx-wat/watcher-registry @stellar/stellar-sdk
-```
-
-```typescript
-import { Client, networks } from "@tx-wat/watcher-registry";
-
-const client = new Client({
-  contractId: networks.testnet.contractId,
-  networkPassphrase: networks.testnet.networkPassphrase,
-  rpcUrl: networks.testnet.rpcUrl,
-});
-
-const authorized = await client.is_authorized({ watcher: "GABC...XYZ" });
-console.log(authorized.result); // true | false
-```
-
-See [bindings/watcher-registry/README.md](bindings/watcher-registry/README.md)
-for the full API reference and usage examples.
-
-## Deployed Addresses
-
-See [DEPLOYMENTS.md](DEPLOYMENTS.md).
-
-## Docs
-
-- [Alert Registry function reference](docs/alert-registry.md)
-- [Watcher Registry function reference](docs/watcher-registry.md)
-- [Ecosystem submission guide](docs/ecosystem-submission.md)
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Sister Repos
-
-- **Core engine:** https://github.com/Tx-wat/stellar-txwatch-core
-- **Web dashboard:** https://github.com/Tx-wat/stellar-txwatch-web
-
-## License
-
-MIT
+> **Re-entrancy safety:** Soroban executes contract calls atomically and prevents classic callback-based re-entrancy within the same transaction. The registry contracts only mutate local storage after `require_auth()` succeeds, and they do not invoke external contracts, so re-entrancy is not a concern for these registries.
