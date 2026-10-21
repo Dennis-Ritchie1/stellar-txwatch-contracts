@@ -10,6 +10,9 @@ resolver = "2"
 [workspace.dependencies]
 soroban-sdk = { version = "23.0.0" }
 
+[workspace.lints.clippy]
+all = "warn"
+
 [profile.release]
 opt-level = "z"
 overflow-checks = true

@@ -28,6 +28,9 @@ make test
 # Lint
 make lint
 
+# Lint (warnings are errors)
+cargo clippy --all-targets --all-features -- -D warnings
+
 # Generate TypeScript bindings
 make bindings
 
