@@ -15,7 +15,7 @@ Source: `contracts/alert-registry/src/lib.rs`
 | `DataKey::Alert(id: u64)` | Persistent | `AlertConfig` | A single alert configuration, keyed by its numeric ID. The `active` flag is stored inside `AlertConfig` |
 | `DataKey::OwnerIndex(addr: Address)` | Persistent | `Vec<u64>` | List of alert IDs owned by a given address |
 | `DataKey::ContractIndex(addr: Address)` | Persistent | `Vec<u64>` | List of alert IDs watching a given contract address |
-| `symbol_short!("NEXT_ID")` | Instance | `u64` | Monotonic counter used to generate unique alert IDs |
+| `symbol_short!("NEXT_ID")` | Instance | `u64` | Monotonic counter used to generate unique alert IDs (uses `checked_add(1)`, returning `ContractError::CounterOverflow` on `u64::MAX`) |
 | `symbol_short!("ADMIN")` | Instance | `Address` | Optional admin address that may remove alerts and set owner limits |
 | `symbol_short!("LIMIT")` | Instance | `u32` | Optional per-owner active alert limit |
 | `symbol_short!("WATCHREG")` | Instance | `Address` | Optional `WatcherRegistry` contract address; when set, read queries are gated to registered watchers |

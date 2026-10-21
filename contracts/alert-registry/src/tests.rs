@@ -1,6 +1,7 @@
 use crate::AlertRegistry;
 use crate::ContractError;
 use crate::AlertRegistryClient;
+use crate::DataKey;
 use soroban_sdk::{testutils::Address as _, vec, Address, Env, String, Vec};
 
 fn setup() -> (Env, AlertRegistryClient<'static>) {
@@ -875,4 +876,26 @@ fn test_ten_alerts_same_owner_same_contract() {
         10,
         "contract index must contain exactly 10 entries"
     );
+}
+
+// Counter overflow guard: set counter to u64::MAX and verify CounterOverflow returned
+#[test]
+fn test_counter_overflow_guard() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    // Set counter to u64::MAX across both storage locations
+    env.storage().instance().set(&soroban_sdk::symbol_short!("NEXT_ID"), &u64::MAX);
+    env.storage().persistent().set(&DataKey::NextId, &u64::MAX);
+
+    let res = client.try_register_alert(
+        &owner,
+        &target,
+        &str(&env, "alert-overflow"),
+        &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        &vec![&env],
+    );
+
+    assert_eq!(res.unwrap_err().unwrap(), ContractError::CounterOverflow);
 }
