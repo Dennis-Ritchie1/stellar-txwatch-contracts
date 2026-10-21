@@ -1,7 +1,7 @@
 use soroban_sdk::{symbol_short, vec, Address, Env, Vec};
 
 use crate::types::{AlertConfig, ContractError, DataKey};
-use crate::{DEFAULT_TTL};
+use crate::{DEFAULT_TTL, RATE_LIMIT_COUNT, RATE_LIMIT_WINDOW};
 
 // ── ID counter ────────────────────────────────────────────────────────────────
 
@@ -9,19 +9,24 @@ use crate::{DEFAULT_TTL};
 ///
 /// Returns the current value before incrementing, so the first ID is `0`.
 /// Stored in persistent storage so it survives instance TTL expiry.
-pub fn next_id(env: &Env) -> u64 {
+///
+/// The counter is monotonic and non-reusable: IDs are never recycled, even
+/// after an alert is removed. If the counter is already at `u64::MAX`, the
+/// increment would overflow (wrapping to `0` and overwriting alert ID `0` in
+/// release builds), so this returns [`ContractError::CounterOverflow`]
+/// instead of wrapping.
+pub fn next_id(env: &Env) -> Result<u64, ContractError> {
     let id: u64 = env
         .storage()
         .persistent()
         .get(&DataKey::NextId)
         .unwrap_or(0u64);
-    env.storage()
-        .persistent()
-        .set(&DataKey::NextId, &(id + 1));
+    let next = id.checked_add(1).ok_or(ContractError::CounterOverflow)?;
+    env.storage().persistent().set(&DataKey::NextId, &next);
     env.storage()
         .persistent()
         .extend_ttl(&DataKey::NextId, 100, 100);
-    id
+    Ok(id)
 }
 
 // ── Alert CRUD ────────────────────────────────────────────────────────────────
@@ -228,4 +233,40 @@ pub fn get_limit(env: &Env) -> u32 {
 
 pub fn set_limit(env: &Env, limit: u32) {
     env.storage().instance().set(&symbol_short!("LIMIT"), &limit);
+}
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+
+/// Enforce the per-owner registration rate limit.
+///
+/// Tracks the current window's start ledger and the number of registrations
+/// made within it. Once `RATE_LIMIT_COUNT` registrations have occurred inside
+/// a `RATE_LIMIT_WINDOW`-ledger window, further registrations are rejected
+/// with [`ContractError::RateLimitExceeded`] until the window rolls over.
+pub fn check_rate_limit(env: &Env, owner: &Address) -> Result<(), ContractError> {
+    let now = env.ledger().sequence();
+    let key = DataKey::RateLimit(owner.clone());
+    let (window_start, count): (u32, u32) = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or((now, 0u32));
+
+    if now.saturating_sub(window_start) >= RATE_LIMIT_WINDOW {
+        env.storage().persistent().set(&key, &(now, 1u32));
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, DEFAULT_TTL, DEFAULT_TTL);
+        return Ok(());
+    }
+
+    if count >= RATE_LIMIT_COUNT {
+        return Err(ContractError::RateLimitExceeded);
+    }
+
+    env.storage().persistent().set(&key, &(window_start, count + 1));
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, DEFAULT_TTL, DEFAULT_TTL);
+    Ok(())
 }

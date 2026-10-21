@@ -49,20 +49,21 @@ After running `scripts/deploy.sh`, replace the placeholder values with the print
 
 ---
 
-## Admin Keys
+## Expected WASM Hashes
 
-`scripts/upgrade.sh` verifies the current on-chain admin key against this table before
-upgrading. Keep these in sync with the admin set at deploy time; a mismatch aborts the
-upgrade.
+`scripts/verify.sh` compares the on-chain WASM hash of each deployed contract against the values below.  
+After building with `cargo build --target wasm32-unknown-unknown --release`, record the hash of each artifact:
 
-| Network | Contract | Admin Address |
-|---|---|---|
-| Testnet | Alert Registry | `GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` |
-| Testnet | Watcher Registry | `GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` |
-| Mainnet | Alert Registry | `GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` |
-| Mainnet | Watcher Registry | `GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` |
+```bash
+sha256sum target/wasm32-unknown-unknown/release/*.wasm
+```
 
-> Replace the `GXXX...` placeholders with the real admin public keys after each deploy.
+| Contract | WASM Hash (sha256) |
+|---|---|
+| Alert Registry | `XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` |
+| Watcher Registry | `XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` |
+
+> Replace the `XXXX...` placeholders with the hashes of the deployed artifacts and commit the update alongside the addresses.
 
 ---
 
@@ -74,7 +75,8 @@ upgrade.
    ```
 2. Copy the contract addresses printed at the end of the script output.
 3. Replace the corresponding `CXXX...` placeholders in the table above.
-4. Commit the update:
+4. Record the deployed WASM hashes in the **Expected WASM Hashes** table above.
+5. Commit the update:
    ```bash
    git add DEPLOYMENTS.md
    git commit -m "deploy: update contract addresses for <network> (<date>)"

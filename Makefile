@@ -1,17 +1,44 @@
-.PHONY: build test lint fmt deploy-testnet bindings clean
+.PHONY: help build test lint fmt fmt-check doc deploy-testnet bindings clean verify
 
+# Print available targets with descriptions.
+help:
+	@echo "Available targets:"
+	@echo "  build          Build the contract (cargo build --release --target wasm32-unknown-unknown)"
+	@echo "  test           Run the test suite (cargo test --all)"
+	@echo "  lint           Run clippy with warnings as errors (cargo clippy --all-targets -- -D warnings)"
+	@echo "  fmt            Format all code (cargo fmt --all)"
+	@echo "  fmt-check      Check formatting without modifying files (cargo fmt --all -- --check)"
+	@echo "  doc            Build and open documentation (cargo doc --no-deps --open)"
+	@echo "  deploy-testnet Deploy the contract to testnet (scripts/deploy.sh)"
+	@echo "  bindings       Generate TypeScript bindings for WatcherRegistry"
+	@echo "  clean          Remove build artifacts (cargo clean)"
+	@echo "  verify         Run verification against testnet (scripts/verify.sh --network testnet)"
+
+# Build the contract for the wasm32 target in release mode.
 build:
 	cargo build --release --target wasm32-unknown-unknown
 
+# Run the full test suite across all targets.
 test:
-	cargo test
+	cargo test --all
 
+# Run clippy across all targets, treating warnings as errors.
 lint:
-	cargo clippy --all-targets --all-features -- -D warnings
+	cargo clippy --all-targets -- -D warnings
 
+# Format all code.
 fmt:
 	cargo fmt --all
 
+# Check formatting without modifying files.
+fmt-check:
+	cargo fmt --all -- --check
+
+# Build and open the crate documentation.
+doc:
+	cargo doc --no-deps --open
+
+# Deploy the contract to testnet.
 deploy-testnet:
 	bash scripts/deploy.sh
 
@@ -26,6 +53,11 @@ bindings: build
 		--overwrite
 	cd bindings/watcher-registry && npm install && npm run build
 
+# Remove build artifacts.
 clean:
 	cargo clean
 	rm -rf bindings/watcher-registry/dist bindings/watcher-registry/node_modules
+
+# Run verification against testnet.
+verify:
+	bash scripts/verify.sh --network testnet

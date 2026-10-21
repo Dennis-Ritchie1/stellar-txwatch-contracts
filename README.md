@@ -1,5 +1,7 @@
 # stellar-txwatch-contracts
 
+[![codecov](https://codecov.io/gh/Tx-wat/stellar-txwatch-contracts/branch/main/graph/badge.svg)](https://codecov.io/gh/Tx-wat/stellar-txwatch-contracts)
+
 Soroban smart contracts for on-chain alert configuration storage and watcher registry.  
 Part of the [Tx-wat](https://github.com/Tx-wat) organization.
 
@@ -18,14 +20,64 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add wasm32-unknown-unknown
 
 # Build
-cargo build --release --target wasm32-unknown-unknown
+make build
 
 # Test
-cargo test
+make test
+
+# Lint
+make lint
 
 # Generate TypeScript bindings
 make bindings
+
+# See all available targets
+make help
 ```
+
+## Deploying Contracts
+
+Use `scripts/deploy.sh` to deploy both contracts to a target network. The script is
+idempotent: if a contract is already deployed it skips the upload/deploy step and
+runs a post-deploy health check to confirm the contract is callable.
+
+Required environment variables (documented at the top of the script):
+
+| Variable | Description |
+|---|---|
+| `NETWORK` | Target network: `testnet` or `mainnet` |
+| `SOURCE` | Stellar CLI identity used to sign the deploy |
+| `ALERT_REGISTRY_ID` | Existing AlertRegistry contract ID (optional; enables idempotency check) |
+| `WATCHER_REGISTRY_ID` | Existing WatcherRegistry contract ID (optional; enables idempotency check) |
+
+```bash
+# Deploy to testnet
+NETWORK=testnet SOURCE=my-identity ./scripts/deploy.sh
+
+# Re-run against an existing deployment (skips upload, verifies health)
+NETWORK=testnet SOURCE=my-identity \
+  ALERT_REGISTRY_ID=<ALERT_REGISTRY_CONTRACT_ID> \
+  WATCHER_REGISTRY_ID=<WATCHER_REGISTRY_CONTRACT_ID> \
+  ./scripts/deploy.sh
+```
+
+## Test Coverage
+
+CI measures test coverage with [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and uploads the report to [Codecov](https://codecov.io/gh/Tx-wat/stellar-txwatch-contracts). The build fails if overall coverage drops below 80%.
+
+```bash
+# Install and run locally
+cargo install cargo-llvm-cov
+cargo llvm-cov --all-features --lcov --output-path lcov.info
+```
+
+Coverage targets:
+
+| Crate | Target |
+|---|---|
+| alert-registry | >= 90% |
+| watcher-registry | >= 90% |
+| integration-tests | >= 80% |
 
 ## TypeScript Bindings
 
@@ -260,13 +312,4 @@ let config_id = alert_registry.register_alert(
 );
 ```
 
-> **Re-entrancy safety:** Soroban executes contract calls atomically and prevents classic callback-based re-entrancy within the same transaction. The registry contracts only mutate local storage after `require_auth()` succeeds, and they do not invoke external contracts, so re-entrancy is not a practical attack surface here.
-
-## Security
-
-Threat models and attack-scenario analysis live in [docs/threat-model.md](docs/threat-model.md).
-
-- [WatcherRegistry threat analysis](docs/threat-model.md#watcherregistry)
-- [AlertRegistry threat analysis](docs/threat-model.md#alertregistry) — covers invalid-rule DoS, owner-index/storage exhaustion, front-running alert registration, admin `remove_alert_by_admin` abuse, stale off-chain watcher caches, and ID counter overflow.
-
-If you discover a vulnerability, please report it privately rather than opening a public issue.
+> **Re-entrancy safety:** Soroban executes contract calls atomically and prevents classic callback-based re-entrancy within the same transaction. The registry contracts only mutate local storage after `require_auth()` succeeds, and they do not invoke external contracts, so re-entrancy is not a concern for these registries.
