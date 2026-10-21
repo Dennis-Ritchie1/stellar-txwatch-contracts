@@ -1,5 +1,7 @@
 # stellar-txwatch-contracts
 
+[![codecov](https://codecov.io/gh/Tx-wat/stellar-txwatch-contracts/branch/main/graph/badge.svg)](https://codecov.io/gh/Tx-wat/stellar-txwatch-contracts)
+
 Soroban smart contracts for on-chain alert configuration storage and watcher registry.  
 Part of the [Tx-wat](https://github.com/Tx-wat) organization.
 
@@ -59,37 +61,23 @@ NETWORK=testnet SOURCE=my-identity \
   ./scripts/deploy.sh
 ```
 
-If a deploy partially fails, the script exits non-zero (via `set -euo pipefail`).
-Re-run the script with the contract IDs that were successfully deployed set in the
-environment — the idempotency check will skip those and retry only the remaining
-contracts. No on-chain rollback is required; a failed deploy leaves no contract
-behind, so re-running is safe.
+## Test Coverage
 
-## Verifying a Deployment
-
-After deploying, run `scripts/verify.sh` to validate the deployed contract state.
-The script accepts a `--network` flag (`testnet` or `mainnet`) and exits `0` only
-if every check passes. It verifies:
-
-1. Both contracts are deployed and accessible.
-2. `AlertRegistry.get_admin` returns a valid address.
-3. `WatcherRegistry.get_admins` returns at least one address.
-4. A round-trip test: register an alert, retrieve it, then remove it.
-5. `is_authorized` returns `false` for a random address (registry is not compromised).
-6. The deployed WASM hash matches the expected value from `DEPLOYMENTS.md`.
+CI measures test coverage with [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and uploads the report to [Codecov](https://codecov.io/gh/Tx-wat/stellar-txwatch-contracts). The build fails if overall coverage drops below 80%.
 
 ```bash
-# Verify a testnet deployment
-make verify
-
-# Verify a mainnet deployment
-./scripts/verify.sh --network mainnet
+# Install and run locally
+cargo install cargo-llvm-cov
+cargo llvm-cov --all-features --lcov --output-path lcov.info
 ```
 
-Each check prints a clear `PASS`/`FAIL` line so you can see exactly which checks
-succeeded and which failed. Contract IDs and the signing identity are read from
-the same environment variables used by `scripts/deploy.sh` (`ALERT_REGISTRY_ID`,
-`WATCHER_REGISTRY_ID`, `SOURCE`).
+Coverage targets:
+
+| Crate | Target |
+|---|---|
+| alert-registry | >= 90% |
+| watcher-registry | >= 90% |
+| integration-tests | >= 80% |
 
 ## TypeScript Bindings
 
@@ -247,6 +235,81 @@ import {
   Address,
 } from "@stellar/stellar-sdk";
 
-const server = new SorobanRpc.Server("https://soroban-testne
+const server = new SorobanRpc.Server("https://soroban-testnet.stellar.org");
+const contract = new Contract("<WATCHER_REGISTRY_CONTRACT_ID>");
 
-/* … truncated 1226 chars — edit only what you need near the top … */
+// Initialize the registry (one-time, admin only)
+const account = await server.getAccount(adminKeypair.publicKey());
+const initTx = new TransactionBuilder(account, {
+  fee: BASE_FEE,
+  networkPassphrase: Networks.TESTNET,
+})
+  .addOperation(
+    contract.call(
+      "initialize",
+      new Address(adminKeypair.publicKey()).toScVal(), // admin
+    )
+  )
+  .setTimeout(30)
+  .build();
+
+const preparedInit = await server.prepareTransaction(initTx);
+preparedInit.sign(adminKeypair);
+await server.sendTransaction(preparedInit);
+
+// Register a watcher node (admin only)
+const account2 = await server.getAccount(adminKeypair.publicKey());
+const registerTx = new TransactionBuilder(account2, {
+  fee: BASE_FEE,
+  networkPassphrase: Networks.TESTNET,
+})
+  .addOperation(
+    contract.call(
+      "register_watcher",
+      new Address(adminKeypair.publicKey()).toScVal(),   // admin
+      new Address("<WATCHER_NODE_ADDRESS>").toScVal(),   // watcher
+    )
+  )
+  .setTimeout(30)
+  .build();
+
+const preparedRegister = await server.prepareTransaction(registerTx);
+preparedRegister.sign(adminKeypair);
+await server.sendTransaction(preparedRegister);
+
+// Check if an address is an authorized watcher (read-only, no signature needed)
+const account3 = await server.getAccount(adminKeypair.publicKey());
+const checkTx = new TransactionBuilder(account3, {
+  fee: BASE_FEE,
+  networkPassphrase: Networks.TESTNET,
+})
+  .addOperation(
+    contract.call(
+      "is_authorized",
+      new Address("<WATCHER_NODE_ADDRESS>").toScVal(), // watcher
+    )
+  )
+  .setTimeout(30)
+  .build();
+
+const result = await server.simulateTransaction(checkTx);
+console.log("Is authorized:", result.result?.retval); // SCV_BOOL
+```
+
+### Invoking Contracts (Rust SDK)
+
+```rust
+use soroban_sdk::{Address, Env, String, Vec};
+
+// In a cross-contract call context:
+let alert_registry = AlertRegistryClient::new(&env, &alert_registry_id);
+let config_id = alert_registry.register_alert(
+    &owner,
+    &target_contract,
+    &String::from_str(&env, "My Alert"),
+    &String::from_str(&env, "<webhook-hash>"),
+    &rules,
+);
+```
+
+> **Re-entrancy safety:** Soroban executes contract calls atomically and prevents classic callback-based re-entrancy within the same transaction. The registry contracts only mutate local storage after `require_auth()` succeeds, and they do not invoke external contracts, so re-entrancy is not a concern for these registries.
