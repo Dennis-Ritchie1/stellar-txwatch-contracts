@@ -33,6 +33,10 @@ cargo test
 
 Tests run natively (no WASM target needed). Each contract has a `#[cfg(test)]` module covering happy paths, unauthorized rejections, and edge cases.
 
+## Pull Requests
+
+When opening a pull request, use the template in [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md). It includes contract-specific checklist items (tests, CHANGELOG, docs, TypeScript bindings, clippy, `require_auth()` verification, and `ContractError` rustdoc) that must be completed for contract changes.
+
 ## Deploy to Testnet
 
 1. Set up a funded testnet identity:
@@ -50,6 +54,29 @@ bash scripts/deploy.sh
 
 3. Update `DEPLOYMENTS.md` with the printed contract addresses.
 
+## Changelog Updates
+
+Every PR that changes contract behavior, adds a function, or fixes a bug must
+include a `CHANGELOG.md` update. Read-only changes (docs, tests, CI) are
+optional but encouraged.
+
+1. Add entries under the `[Unreleased]` section.
+2. Use one of the categories: **Added**, **Fixed**, **Changed**, **Deprecated**,
+   **Removed**, **Security**.
+3. Reference the issue number at the end of the entry, e.g. `(#123)`.
+
+Example entry:
+
+```markdown
+## [Unreleased]
+
+### Added
+- `rule:burn` descriptor accepted by `validate_rules` (#123)
+
+### Fixed
+- Reject unauthorized `set_admin` calls (#124)
+```
+
 ## Adding a New Function to an Existing Contract
 
 1. Add the function inside the `#[contractimpl]` block in `contracts/<name>/src/lib.rs`.
@@ -58,23 +85,41 @@ bash scripts/deploy.sh
 4. Run `cargo fmt` and `cargo test` to confirm everything passes.
 5. Update the relevant doc in `docs/`.
 
-## Release Process
+## Adding a New Rule Descriptor
 
-Releases are automated via `.github/workflows/release.yml`.
+Rule descriptors (e.g. `rule:invoke`, `rule:burn`) are the identifiers that
+contracts emit and the off-chain watcher matches against. Adding a new one
+spans several layers, so follow the full process below. See
+[docs/contributing-contracts.md](docs/contributing-contracts.md#adding-a-new-rule-descriptor)
+for the detailed guide.
 
-1. Move the relevant entries in `CHANGELOG.md` into the `[Unreleased]` section and commit them to `main`.
-2. Tag the release and push the tag:
+1. **Propose** — open an issue describing the descriptor name, its semantics,
+   and the use case it enables. Get agreement before writing code.
+2. **Contract change** — add the descriptor to the `validate_rules` allow-list
+   in the relevant contract so it is accepted by validation.
+3. **Watcher change** — implement the matching logic for the descriptor in
+   [`stellar-txwatch-core`](https://github.com/Tx-wat/stellar-txwatch-core).
+4. **Docs** — update the rule descriptor table in `docs/alert-registry.md`.
+5. **Test** — add a unit test in the contract and an integration test in the
+   core watcher.
+6. **TypeScript** — regenerate the bindings if the type surface changes.
 
-```bash
-git tag v0.1.0
-git push origin v0.1.0
+### PR Template for New Rule Descriptors
+
+When opening a PR that adds a rule descriptor, use this checklist in the PR
+body:
+
+```markdown
+## New Rule Descriptor: `rule:<name>`
+
+- [ ] Proposal issue linked (name, semantics, use case)
+- [ ] Descriptor added to `validate_rules` allow-list
+- [ ] Matching logic implemented in `stellar-txwatch-core`
+- [ ] `docs/alert-registry.md` rule descriptor table updated
+- [ ] Contract unit test added
+- [ ] Core integration test added
+- [ ] TypeScript bindings regenerated (if type surface changed)
 ```
-
-3. The `release.yml` workflow triggers on tags matching `v*.*.*` and will:
-   - Extract the `[Unreleased]` section from `CHANGELOG.md` as the release body.
-   - Create a GitHub Release for the tag with those notes.
-   - Trigger the `publish-bindings` workflow to publish new npm packages.
-   - Trigger the `publish-abis` workflow to upload WASM artifacts.
 
 ## Sister Repos
 
