@@ -2,6 +2,15 @@ use soroban_sdk::{contracttype, contracterror, Address, String, Vec};
 
 pub const MAX_BATCH_SIZE: u32 = 20;
 
+/// Maximum number of alert registrations allowed per owner within a single
+/// rate-limit window. See [`RATE_LIMIT_WINDOW`].
+pub const RATE_LIMIT_COUNT: u32 = 10;
+
+/// Length of the rate-limit window, measured in ledgers (~8 minutes at
+/// ~5s per ledger). An owner may register at most [`RATE_LIMIT_COUNT`] alerts
+/// per window.
+pub const RATE_LIMIT_WINDOW: u32 = 100;
+
 // ── Errors ────────────────────────────────────────────────────────────────────
 
 #[contracterror]
@@ -17,7 +26,18 @@ pub enum ContractError {
     TooManyRules = 7,
     InvalidRuleDescriptor = 8,
     OwnerAlertLimitExceeded = 9,
-    DuplicateAlertId = 10,}
+    DuplicateAlertId = 10,
+    /// Returned when an owner exceeds [`RATE_LIMIT_COUNT`] registrations
+    /// within [`RATE_LIMIT_WINDOW`] ledgers.
+    RateLimitExceeded = 11,
+    /// Returned when the alert ID counter would overflow `u64`.
+    ///
+    /// The counter starts at 0 and increments by one per registration. In
+    /// release builds integer overflow wraps silently, so at `u64::MAX` the
+    /// next increment would wrap to 0 and overwrite alert ID 0. `next_id`
+    /// uses `checked_add` and returns this error instead of wrapping.
+    CounterOverflow = 14,
+}
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
@@ -32,9 +52,24 @@ pub enum DataKey {
     ContractIndex(Address),
     /// Monotonic counter used to generate unique alert IDs.
     NextId,
+    /// Stores the per-owner rate-limit state ([`RateLimitState`]).
+    RateLimit(Address),
 }
 
 // ── Data types ────────────────────────────────────────────────────────────────
+
+/// Per-owner rate-limit bookkeeping stored in instance storage.
+///
+/// Tracks how many alerts an owner has registered within the current window
+/// and the ledger sequence at which that window started.
+#[contracttype]
+#[derive(Clone)]
+pub struct RateLimitState {
+    /// Ledger sequence at which the current window began.
+    pub window_start: u32,
+    /// Number of registrations recorded in the current window.
+    pub count: u32,
+}
 
 /// Input payload for a single alert in a `batch_register_alerts` call.
 ///
