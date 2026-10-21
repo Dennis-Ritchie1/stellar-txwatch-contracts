@@ -29,6 +29,10 @@ cargo test
 
 Tests run natively (no WASM target needed). Each contract has a `#[cfg(test)]` module covering happy paths, unauthorized rejections, and edge cases.
 
+## Pull Requests
+
+When opening a pull request, use the template in [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md). It includes contract-specific checklist items (tests, CHANGELOG, docs, TypeScript bindings, clippy, `require_auth()` verification, and `ContractError` rustdoc) that must be completed for contract changes.
+
 ## Deploy to Testnet
 
 1. Set up a funded testnet identity:
@@ -46,6 +50,29 @@ bash scripts/deploy.sh
 
 3. Update `DEPLOYMENTS.md` with the printed contract addresses.
 
+## Changelog Updates
+
+Every PR that changes contract behavior, adds a function, or fixes a bug must
+include a `CHANGELOG.md` update. Read-only changes (docs, tests, CI) are
+optional but encouraged.
+
+1. Add entries under the `[Unreleased]` section.
+2. Use one of the categories: **Added**, **Fixed**, **Changed**, **Deprecated**,
+   **Removed**, **Security**.
+3. Reference the issue number at the end of the entry, e.g. `(#123)`.
+
+Example entry:
+
+```markdown
+## [Unreleased]
+
+### Added
+- `rule:burn` descriptor accepted by `validate_rules` (#123)
+
+### Fixed
+- Reject unauthorized `set_admin` calls (#124)
+```
+
 ## Adding a New Function to an Existing Contract
 
 1. Add the function inside the `#[contractimpl]` block in `contracts/<name>/src/lib.rs`.
@@ -54,15 +81,41 @@ bash scripts/deploy.sh
 4. Run `cargo test` to confirm everything passes.
 5. Update the relevant doc in `docs/`.
 
-## Architecture Decision Records
+## Adding a New Rule Descriptor
 
-Significant design changes require a new Architecture Decision Record (ADR).
-This includes changes to storage tiers, authorization models, multi-step
-flows, or any decision a future contributor would otherwise have to ask about.
+Rule descriptors (e.g. `rule:invoke`, `rule:burn`) are the identifiers that
+contracts emit and the off-chain watcher matches against. Adding a new one
+spans several layers, so follow the full process below. See
+[docs/contributing-contracts.md](docs/contributing-contracts.md#adding-a-new-rule-descriptor)
+for the detailed guide.
 
-ADRs live in [`docs/adr/`](docs/adr/) and follow the Status / Context /
-Decision / Consequences format described there. Add a new numbered ADR and
-link it from the index in `docs/adr/README.md`.
+1. **Propose** — open an issue describing the descriptor name, its semantics,
+   and the use case it enables. Get agreement before writing code.
+2. **Contract change** — add the descriptor to the `validate_rules` allow-list
+   in the relevant contract so it is accepted by validation.
+3. **Watcher change** — implement the matching logic for the descriptor in
+   [`stellar-txwatch-core`](https://github.com/Tx-wat/stellar-txwatch-core).
+4. **Docs** — update the rule descriptor table in `docs/alert-registry.md`.
+5. **Test** — add a unit test in the contract and an integration test in the
+   core watcher.
+6. **TypeScript** — regenerate the bindings if the type surface changes.
+
+### PR Template for New Rule Descriptors
+
+When opening a PR that adds a rule descriptor, use this checklist in the PR
+body:
+
+```markdown
+## New Rule Descriptor: `rule:<name>`
+
+- [ ] Proposal issue linked (name, semantics, use case)
+- [ ] Descriptor added to `validate_rules` allow-list
+- [ ] Matching logic implemented in `stellar-txwatch-core`
+- [ ] `docs/alert-registry.md` rule descriptor table updated
+- [ ] Contract unit test added
+- [ ] Core integration test added
+- [ ] TypeScript bindings regenerated (if type surface changed)
+```
 
 ## Sister Repos
 

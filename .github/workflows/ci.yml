@@ -13,11 +13,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Issue #318 — rely on rust-toolchain.toml for the pinned toolchain,
+      # targets, and components so CI matches local builds.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
-          components: clippy, rustfmt
+          components: clippy, rustfmt, llvm-tools-preview
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -28,6 +31,18 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: ${{ runner.os }}-cargo-
+
+      # Issue #320 — enforce SPDX license headers on all source files
+      - name: Check SPDX license headers
+        run: |
+          missing=0
+          while IFS= read -r file; do
+            if ! head -n 1 "$file" | grep -q 'SPDX-License-Identifier: MIT'; then
+              echo "::error file=$file::Missing SPDX license header"
+              missing=1
+            fi
+          done < <(find . \( -name '*.rs' -o -name '*.ts' \) -not -path '*/target/*' -not -path '*/node_modules/*')
+          exit $missing
 
       # Issue #99 — WASM build verification
       - name: Build (WASM)
@@ -44,6 +59,12 @@ jobs:
       # Issue #101 — Formatting check
       - name: Format check
         run: cargo fmt --check
+
+      # Issue #283 — Rustdoc build verification (fail on warnings)
+      - name: Doc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps
 
       # Issue #105 — Dependency vulnerability scanning
       - name: Install cargo-audit
