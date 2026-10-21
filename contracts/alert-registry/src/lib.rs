@@ -22,9 +22,9 @@ mod contract_tests;
 
 /// Default TTL applied to persistent storage entries on every write.
 ///
-/// Approximately 24 hours at the nominal 5-second ledger close time.
+/// Approximately 7 days at the nominal 5-second ledger close time (#249).
 /// See `docs/ttl.md` for the full rationale.
-pub const DEFAULT_TTL: u32 = 17_280;
+pub const DEFAULT_TTL: u32 = 120_960;
 
 /// Protocol-enforced upper bound on caller-specified TTL values.
 ///
@@ -75,7 +75,7 @@ pub enum ContractError {
 /// On-chain configuration for a single alert.
 ///
 /// Stored under [`DataKey::Alert`] with a default TTL of [`DEFAULT_TTL`] ledgers
-/// (~24 hours). Use [`AlertRegistry::bump_alert`] to extend up to [`MAX_TTL`].
+/// (~7 days). Use [`AlertRegistry::bump_alert`] to extend up to [`MAX_TTL`].
 /// See `docs/ttl.md` for expiry details.
 #[contracttype]
 #[derive(Clone)]
@@ -117,7 +117,7 @@ pub struct AlertConfig {
 /// functions behave as before.
 ///
 /// # Storage and TTL
-/// All persistent entries are extended by [`DEFAULT_TTL`] ledgers (~24 hours) on every
+/// All persistent entries are extended by [`DEFAULT_TTL`] ledgers (~7 days) on every
 /// write. Callers can extend any alert up to [`MAX_TTL`] ledgers (~31 days) via
 /// [`bump_alert`]. See `docs/ttl.md` for full details.
 #[contract]
@@ -148,6 +148,8 @@ impl AlertRegistry {
             return Err(ContractError::AlreadyInitialized);
         }
         env.storage().instance().set(&symbol_short!("ADMIN"), &admin);
+        // Emit the admin.init event on first initialisation only (#246).
+        env.events().publish((symbol_short!("admin"), symbol_short!("init")), admin);
         Ok(())
     }
 
@@ -160,6 +162,8 @@ impl AlertRegistry {
         admin.require_auth();
         Self::assert_admin(&env, &admin)?;
         env.storage().instance().set(&symbol_short!("ADMIN"), &new_admin);
+        // Record the handover with both addresses, so the audit trail shows who ceded admin (#247).
+        env.events().publish((symbol_short!("admin"), symbol_short!("transfer")), (admin, new_admin));
         Ok(())
     }
 
@@ -180,6 +184,8 @@ impl AlertRegistry {
         admin.require_auth();
         Self::assert_admin(&env, &admin)?;
         env.storage().instance().set(&symbol_short!("LIMIT"), &limit);
+        // Record every limit change on-chain, so the audit trail shows it (#248).
+        env.events().publish((symbol_short!("admin"), symbol_short!("limit")), (admin, limit));
         Ok(())
     }
 

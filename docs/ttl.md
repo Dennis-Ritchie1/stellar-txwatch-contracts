@@ -7,10 +7,10 @@ Soroban persistent storage entries have a **Time-To-Live (TTL)** measured in **l
 ## Current TTL Configuration
 
 All persistent storage entries in `alert-registry` use a **default TTL of
-17 280 ledgers (~24 hours)**:
+120 960 ledgers (~7 days)**:
 
 ```rust
-// DEFAULT_TTL = 17_280  (~24 hours at 5 s/ledger)
+// DEFAULT_TTL = 120_960  (~7 days at 5 s/ledger)
 env.storage().persistent().extend_ttl(&key, DEFAULT_TTL, DEFAULT_TTL);
 ```
 
@@ -50,11 +50,11 @@ Stellar ledgers close approximately every **5 seconds**.
 |---------|-----------------------------|
 | 100     | ~8 minutes 20 seconds       |
 | 1,000   | ~1 hour 23 minutes          |
-| 17,280  | ~24 hours (DEFAULT_TTL)     |
-| 120,960 | ~7 days                     |
+| 17,280  | ~24 hours                    |
+| 120,960 | ~7 days (DEFAULT_TTL)        |
 | 535,680 | ~31 days (MAX_TTL)          |
 
-**The default TTL of 17 280 ledgers keeps an alert alive for ~24 hours after
+**The default TTL of 120 960 ledgers keeps an alert alive for ~7 days after
 the last write.**  Use `bump_alert` to extend beyond that without modifying
 the alert's content.
 

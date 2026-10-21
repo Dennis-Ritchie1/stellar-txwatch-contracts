@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   latest network protocol version (#319).
 
 ### Added
+- **`AlertRegistry` default TTL is now 120 960 ledgers (~7 days)** (was 17 280, ~24 hours), so alerts are not archived after one day without a write (#249). Storage rent per alert rises accordingly; see `docs/ttl.md`.
 - **Feature A — `watcher.remove` event**: `WatcherRegistry::remove_watcher` now emits
   `(Symbol("watcher"), Symbol("remove"))` with `data = watcher: Address` **only when the
   watcher was actually present** (no-op removals are silent). Dependent systems such as
