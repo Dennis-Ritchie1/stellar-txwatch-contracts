@@ -357,6 +357,8 @@ impl AlertRegistry {
 
     /// Update the webhook hash for an existing alert.
     ///
+    /// Emits `(Symbol("alert"), Symbol("webhook"))` with data `(id, caller)`.
+    ///
     /// # Auth
     /// Requires a valid Stellar auth signature from `caller`, who must also be
     /// the original owner of the alert.
@@ -393,8 +395,8 @@ impl AlertRegistry {
             .extend_ttl(&DataKey::ContractIndex(config.target_contract.clone()), DEFAULT_TTL, DEFAULT_TTL);
 
         env.events().publish(
-            (symbol_short!("alert"), symbol_short!("update")),
-            (config_id, caller, active),
+            (symbol_short!("alert"), symbol_short!("webhook")),
+            (config_id, caller),
         );
 
         Ok(())
@@ -2681,6 +2683,32 @@ mod tests {
 
         let cfg = client.get_alert(&id).unwrap();
         assert!(cfg.updated_at > original_updated_at);
+    }
+
+    // update_webhook emits alert.webhook with (id, caller)
+    #[test]
+    fn test_update_webhook_emits_event() {
+        use soroban_sdk::{symbol_short, testutils::Events as _, IntoVal};
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+
+        let id = client.register_alert(
+            &owner,
+            &target,
+            &str(&env, "A"),
+            &str(&env, "hash"),
+            &vec![&env],
+        );
+        client.update_webhook(&owner, &id, &str(&env, "new-hash"));
+
+        let (_, topics, data) = env.events().all().last().unwrap();
+        assert_eq!(
+            topics,
+            (symbol_short!("alert"), symbol_short!("webhook")).into_val(&env)
+        );
+        let data: (u64, Address) = data.into_val(&env);
+        assert_eq!(data, (id, owner));
     }
 
     // 19. Multiple owners watching the same contract — indexes are isolated per owner
