@@ -99,7 +99,7 @@ Emitted when the admin role is first initialised.
 | Topic 1 | `Symbol("init")` |
 | Data | `(admin: Address)` |
 
-**Status:** 🔲 planned (`initialize`)
+**Status:** ✅ implemented (`initialize`)
 
 ---
 
@@ -113,7 +113,7 @@ Emitted when the admin role is transferred to a new address.
 | Topic 1 | `Symbol("transfer")` |
 | Data | `(old_admin: Address, new_admin: Address)` |
 
-**Status:** 🔲 planned (`transfer_admin`)
+**Status:** ✅ implemented (`transfer_admin`)
 
 ---
 
@@ -127,7 +127,7 @@ Emitted when the per-owner alert limit is changed.
 | Topic 1 | `Symbol("limit")` |
 | Data | `(admin: Address, limit: u32)` |
 
-**Status:** 🔲 planned (`set_per_owner_alert_limit`)
+**Status:** ✅ implemented (`set_per_owner_alert_limit`)
 
 ---
 
