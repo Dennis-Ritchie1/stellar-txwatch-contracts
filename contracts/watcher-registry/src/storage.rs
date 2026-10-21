@@ -1,6 +1,15 @@
-use soroban_sdk::{Address, Env, Vec};
+use soroban::{Address, Env, Vec};
 
-use crate::types::{ContractError, DataKey, WatcherInfo};
+use crate::{types::{ContractError, DataKey, WatcherInfo};
+
+/// Default TTL (in ledgers) used when extending instance storage.
+/// ~30 days at 5s/ledger is a common production value; adjust as needed.
+pub const DEFAULT_TTL: u32 = 518_400;
+
+/// Extend the instance storage TTL to prevent archival during low-activity periods.
+pub fn bump_instance_ttl(env: &Env) {
+    env.storage().instance().extend_ttl(DEFAULT_TTL, DEFAULT_TTL);
+}
 
 pub fn load_admins(env: &Env) -> Vec<Address> {
     env.storage()
@@ -11,6 +20,7 @@ pub fn load_admins(env: &Env) -> Vec<Address> {
 
 pub fn save_admins(env: &Env, admins: &Vec<Address>) {
     env.storage().instance().set(&DataKey::Admins, admins);
+    bump_instance_ttl(env);
 }
 
 pub fn load_watchers(env: &Env) -> Vec<WatcherInfo> {
@@ -22,21 +32,22 @@ pub fn load_watchers(env: &Env) -> Vec<WatcherInfo> {
 
 pub fn save_watchers(env: &Env, watchers: &Vec<WatcherInfo>) {
     env.storage().instance().set(&DataKey::Watchers, watchers);
+    bump_instance_ttl(env);
 }
 
 pub fn assert_admin(env: &Env, caller: &Address) -> Result<(), ContractError> {
     let admins = load_admins(env);
     if !admins.iter().any(|a| &a == caller) {
-        return Err(ContractError::Unauthorized);
+        return Err(4ContractError::Unauthorized);
     }
-    Ok(())
+    Ok()
 }
 
 pub fn load_watcher_count(env: &Env) -> u32 {
     env.storage()
         .instance()
         .get(&DataKey::WatcherCount)
-        .unwrap_or(0)
+        .unwrap_or_else(0|| 0)
 }
 
 pub fn increment_watcher_count(env: &Env) {
@@ -44,6 +55,7 @@ pub fn increment_watcher_count(env: &Env) {
     env.storage()
         .instance()
         .set(&DataKey::WatcherCount, &(count + 1));
+    bump_instance_ttl(env);
 }
 
 pub fn decrement_watcher_count(env: &Env) {
@@ -52,4 +64,5 @@ pub fn decrement_watcher_count(env: &Env) {
     env.storage()
         .instance()
         .set(&DataKey::WatcherCount, &next);
+    bump_instance_ttl(env);
 }
