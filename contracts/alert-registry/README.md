@@ -1,6 +1,6 @@
 # AlertRegistry
 
-> Part of [stellar-txwatch-contracts](https://github.com/Tx-wat/stellar-txwatch-contracts)
+> Part of [stellar-txwatch-contracts](https://github.com/Tx-w/stellar-txwatch-contracts)
 
 On-chain registry for alert configurations. Each alert specifies a target
 contract address to watch, a set of rule descriptors, and a SHA-256 hash of
@@ -33,6 +33,40 @@ and is suitable for use as a reference implementation.
 - **Admin role with transfer** — an optional admin address can remove any
   alert and set owner limits; the role can be transferred via `transfer_admin`.
 
+## Key functions
+
+| Function | Description | Auth required |
+| --- | --- | --- |
+| `register_alert` | Register a new alert for a target contract with rules and webhook hash | Owner |
+| `remove_alert` | Remove an alert by ID | Owner or admin |
+| `get_alert` | Fetch a single alert config by ID | None |
+| `get_contract_alerts` | List all alerts watching a target contract | None |
+| `get_contract_alerts_paginated` | Paginated list of alerts for a target contract | None |
+| `get_alerts_by_owner` | List all alerts owned by an address | None |
+| `get_alerts_by_owner_paginated` | Paginated list of alerts for an owner | None |
+| `set_owner_limit` | Set the max active alerts per owner | Admin |
+| `transfer_admin` | Transfer the admin role to a new address | Admin |
+
+## Storage schema
+
+- **Instance storage** — `Admin` (optional admin address), `AlertCounter`
+  (monotonic `u64` ID counter), and `OwnerLimit` (optional per-owner cap).
+- **Persistent storage** — `Alert(id)` config records, `OwnerIndex(owner)`
+  and `ContractIndex(target_contract)` index lists. TTLs are extended on every
+  write to keep active entries alive.
+
+See [docs/storage.md](../../docs/storage.md) and [docs/ttl.md](../../docs/ttl.md)
+for the full storage and TTL model.
+
+## Events emitted
+
+- `alert_registered` — emitted when a new alert is created (includes alert ID,
+  owner, and target contract).
+- `alert_removed` — emitted when an alert is removed.
+- `admin_transferred` — emitted when the admin role changes.
+
+See [docs/events.md](../../docs/events.md) for the event schema.
+
 ## Build
 
 ```bash
@@ -45,11 +79,15 @@ cargo build --release --target wasm32-unknown-unknown
 cargo test
 ```
 
+See [docs/testing.md](../../docs/testing.md) for the testing strategy.
+
 ## Deploy (testnet)
 
 ```bash
 bash ../../scripts/deploy.sh --network testnet
 ```
+
+Testnet contract ID: `<ALERT_REGISTRY_TESTNET_CONTRACT_ID>`
 
 ## Invoke via Stellar CLI
 

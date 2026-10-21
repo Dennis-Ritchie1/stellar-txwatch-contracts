@@ -29,6 +29,10 @@ cargo test
 
 Tests run natively (no WASM target needed). Each contract has a `#[cfg(test)]` module covering happy paths, unauthorized rejections, and edge cases.
 
+## Pull Requests
+
+When opening a pull request, use the template in [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md). It includes contract-specific checklist items (tests, CHANGELOG, docs, TypeScript bindings, clippy, `require_auth()` verification, and `ContractError` rustdoc) that must be completed for contract changes.
+
 ## Deploy to Testnet
 
 1. Set up a funded testnet identity:
@@ -46,6 +50,29 @@ bash scripts/deploy.sh
 
 3. Update `DEPLOYMENTS.md` with the printed contract addresses.
 
+## Changelog Updates
+
+Every PR that changes contract behavior, adds a function, or fixes a bug must
+include a `CHANGELOG.md` update. Read-only changes (docs, tests, CI) are
+optional but encouraged.
+
+1. Add entries under the `[Unreleased]` section.
+2. Use one of the categories: **Added**, **Fixed**, **Changed**, **Deprecated**,
+   **Removed**, **Security**.
+3. Reference the issue number at the end of the entry, e.g. `(#123)`.
+
+Example entry:
+
+```markdown
+## [Unreleased]
+
+### Added
+- `rule:burn` descriptor accepted by `validate_rules` (#123)
+
+### Fixed
+- Reject unauthorized `set_admin` calls (#124)
+```
+
 ## Adding a New Function to an Existing Contract
 
 1. Add the function inside the `#[contractimpl]` block in `contracts/<name>/src/lib.rs`.
@@ -54,31 +81,41 @@ bash scripts/deploy.sh
 4. Run `cargo test` to confirm everything passes.
 5. Update the relevant doc in `docs/`.
 
-## Branch Protection & Merge Process
+## Adding a New Rule Descriptor
 
-The `main` branch is protected to keep contract code safe from accidental force pushes and unreviewed merges. The following rules are enforced in GitHub settings:
+Rule descriptors (e.g. `rule:invoke`, `rule:burn`) are the identifiers that
+contracts emit and the off-chain watcher matches against. Adding a new one
+spans several layers, so follow the full process below. See
+[docs/contributing-contracts.md](docs/contributing-contracts.md#adding-a-new-rule-descriptor)
+for the detailed guide.
 
-- **Pull request required.** All changes land on `main` through a pull request; direct pushes to `main` are restricted.
-- **At least 1 approval.** Every PR needs at least one approving review before it can be merged.
-- **Required status checks.** A PR cannot merge until these checks pass:
-  - `CI`
-  - `clippy`
-  - `fmt-check`
-  - `doc-check`
-- **Up-to-date branches.** The PR branch must be up to date with `main` before merging (rebase or merge `main` in if it has moved ahead).
-- **Signed commits (recommended).** Signing commits is strongly encouraged for contract code so authorship and integrity can be verified.
+1. **Propose** — open an issue describing the descriptor name, its semantics,
+   and the use case it enables. Get agreement before writing code.
+2. **Contract change** — add the descriptor to the `validate_rules` allow-list
+   in the relevant contract so it is accepted by validation.
+3. **Watcher change** — implement the matching logic for the descriptor in
+   [`stellar-txwatch-core`](https://github.com/Tx-wat/stellar-txwatch-core).
+4. **Docs** — update the rule descriptor table in `docs/alert-registry.md`.
+5. **Test** — add a unit test in the contract and an integration test in the
+   core watcher.
+6. **TypeScript** — regenerate the bindings if the type surface changes.
 
-### Why these rules exist
+### PR Template for New Rule Descriptors
 
-Smart contract code is immutable once deployed, so mistakes are costly. Requiring review, passing CI, and an up-to-date branch ensures every change is validated against the latest `main` before it ships, and blocking force pushes prevents history from being rewritten out from under reviewers and deployers.
+When opening a PR that adds a rule descriptor, use this checklist in the PR
+body:
 
-### Merge workflow
+```markdown
+## New Rule Descriptor: `rule:<name>`
 
-1. Create a feature branch off `main`.
-2. Open a pull request and request at least one review.
-3. Ensure `CI`, `clippy`, `fmt-check`, and `doc-check` are green.
-4. If `main` has advanced, update your branch so it is up to date.
-5. Merge once approved and all checks pass.
+- [ ] Proposal issue linked (name, semantics, use case)
+- [ ] Descriptor added to `validate_rules` allow-list
+- [ ] Matching logic implemented in `stellar-txwatch-core`
+- [ ] `docs/alert-registry.md` rule descriptor table updated
+- [ ] Contract unit test added
+- [ ] Core integration test added
+- [ ] TypeScript bindings regenerated (if type surface changed)
+```
 
 ## Sister Repos
 

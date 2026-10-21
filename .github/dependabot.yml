@@ -1,25 +1,25 @@
 version: 2
 updates:
-  - package-ecosystem: cargo
-    directory: /
+  - package-ecosystem: "cargo"
+    directory: "/"
     schedule:
-      interval: weekly
-    labels:
-      - chore
-      - security
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      soroban:
+        patterns:
+          - "soroban-sdk"
+          - "soroban-sdk-*"
+          - "soroban-*"
 
-  - package-ecosystem: github-actions
-    directory: /
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
-      interval: weekly
-    labels:
-      - ci
-      - chore
-
-  - package-ecosystem: npm
-    directory: /bindings/alert-registry
-    schedule:
-      interval: monthly
-    labels:
-      - chore
-      - typescript
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
