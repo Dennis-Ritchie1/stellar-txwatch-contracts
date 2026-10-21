@@ -29,6 +29,10 @@ cargo test
 
 Tests run natively (no WASM target needed). Each contract has a `#[cfg(test)]` module covering happy paths, unauthorized rejections, and edge cases.
 
+## Pull Requests
+
+When opening a pull request, use the template in [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md). It includes contract-specific checklist items (tests, CHANGELOG, docs, TypeScript bindings, clippy, `require_auth()` verification, and `ContractError` rustdoc) that must be completed for contract changes.
+
 ## Deploy to Testnet
 
 1. Set up a funded testnet identity:
