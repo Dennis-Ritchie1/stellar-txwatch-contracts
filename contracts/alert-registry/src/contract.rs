@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Secondary (non-active) AlertRegistry implementation.
 //!
 //! This module contains a clean, modular implementation of the AlertRegistry
@@ -9,7 +10,6 @@
 //! duplicate Soroban client and without conflicting with the `lib.rs`
 //! implementation.  The `tests.rs` file registers the `lib.rs` version.
 
-#![allow(dead_code)]
 
 use soroban_sdk::{symbol_short, Address, Env, String, Vec};
 
@@ -256,6 +256,51 @@ impl AlertRegistry {
         storage::extend_contract_index_ttl(&env, &config.target_contract);
 
         Ok(())
+    }
+
+    /// Extend the TTL of multiple alerts and their index entries without auth.
+    ///
+    /// This is a keeper-callable variant of [`renew_alert_ttl`] that does not
+    /// require owner authorization, allowing off-chain keeper services to renew
+    /// many alerts in a single transaction. IDs that no longer exist (removed or
+    /// expired) are silently skipped.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::BatchTooLarge`] if `config_ids.len()` exceeds
+    /// [`MAX_BATCH_SIZE`].
+    ///
+    /// # Events
+    /// Emits `(Symbol("alert"), Symbol("bump"))` with data `(id: u64)` for each
+    /// successfully renewed alert.
+    ///
+    /// # Returns
+    /// The number of alerts that were successfully renewed.
+    pub fn bulk_renew_ttl(env: Env, config_ids: Vec<u64>) -> u32 {
+        if config_ids.len() > MAX_BATCH_SIZE {
+            return 0;
+        }
+
+        let mut renewed: u32 = 0;
+        for i in 0..config_ids.len() {
+            let id = config_ids.get(i).unwrap();
+            let config = match storage::get_alert(&env, id) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            storage::extend_alert_ttl(&env, id);
+            storage::extend_owner_index_ttl(&env, &config.owner);
+            storage::extend_contract_index_ttl(&env, &config.target_contract);
+
+            env.events().publish(
+                (symbol_short!("alert"), symbol_short!("bump")),
+                id,
+            );
+
+            renewed += 1;
+        }
+
+        renewed
     }
 
     /// Remove an alert config from storage.
@@ -546,5 +591,41 @@ mod tests {
 
         assert_eq!(client.get_alert_count_for_contract(&target_a), 2u32);
         assert_eq!(client.get_alert_count_for_contract(&target_b), 1u32);
+    }
+
+    #[test]
+    fn test_bulk_renew_ttl_skips_removed() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+
+        let id0 = register(&client, &env, &owner, &target);
+        let id1 = register(&client, &env, &owner, &target);
+        let id2 = register(&client, &env, &owner, &target);
+        let id3 = register(&client, &env, &owner, &target);
+        let id4 = register(&client, &env, &owner, &target);
+
+        client.remove_alert(&owner, &id2).unwrap();
+
+        let ids = vec![&env, id0, id1, id2, id3, id4];
+        let renewed = client.bulk_renew_ttl(&ids);
+        assert_eq!(renewed, 4u32);
+    }
+
+    #[test]
+    fn test_bulk_renew_ttl_enforces_batch_size() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+
+        let id = register(&client, &env, &owner, &target);
+
+        let mut ids = Vec::new(&env);
+        for _ in 0..(MAX_BATCH_SIZE + 1) {
+            ids.push_back(id);
+        }
+
+        let renewed = client.bulk_renew_ttl(&ids);
+        assert_eq!(renewed, 0u32);
     }
 }

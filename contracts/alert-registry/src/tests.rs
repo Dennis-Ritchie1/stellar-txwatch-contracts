@@ -899,3 +899,154 @@ fn test_counter_overflow_guard() {
 
     assert_eq!(res.unwrap_err().unwrap(), ContractError::CounterOverflow);
 }
+
+// ── Feature: bulk_renew_ttl ───────────────────────────────────────────────────
+
+// bulk_renew_ttl — renew 5 alerts, 1 of which was removed — verify 4 renewed
+#[test]
+fn test_bulk_renew_ttl_skips_removed() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let mut ids: Vec<u64> = vec![&env];
+    for i in 0..5u32 {
+        let id = client.register_alert(
+            &owner,
+            &target,
+            &str(&env, "Alert"),
+            &str(&env, "hash"),
+            &vec![&env],
+        );
+        ids.push_back(id);
+    }
+
+    // Remove the third alert
+    let removed_id = ids.get(2).unwrap();
+    client.remove_alert(&owner, &removed_id);
+
+    // Advance time — renew should NOT change updated_at
+    env.ledger().with_mut(|li| li.timestamp += 100);
+
+    let renewed = client.bulk_renew_ttl(&ids);
+    assert_eq!(renewed, 4);
+}
+
+// bulk_renew_ttl — no auth required (keeper-callable)
+#[test]
+fn test_bulk_renew_ttl_no_auth_required() {
+    let env = Env::default();
+    let contract_id = env.register(AlertRegistry, ());
+    let client = AlertRegistryClient::new(&env, &contract_id);
+
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    // Register with auth mocked only for the registration step
+    env.mock_all_auths();
+    let id = client.register_alert(
+        &owner,
+        &target,
+        &str(&env, "Alert"),
+        &str(&env, "hash"),
+        &vec![&env],
+    );
+
+    // Clear auths — bulk_renew_ttl must not require any
+    env.set_auths(&[]);
+
+    let renewed = client.bulk_renew_ttl(&vec![&env, id]);
+    assert_eq!(renewed, 1);
+}
+
+// bulk_renew_ttl — empty batch returns 0
+#[test]
+fn test_bulk_renew_ttl_empty() {
+    let (env, client) = setup();
+    let renewed = client.bulk_renew_ttl(&vec![&env]);
+    assert_eq!(renewed, 0);
+}
+
+// bulk_renew_ttl — all IDs missing returns 0
+#[test]
+fn test_bulk_renew_ttl_all_missing() {
+    let (env, client) = setup();
+    let renewed = client.bulk_renew_ttl(&vec![&env, 999u64, 1000u64]);
+    assert_eq!(renewed, 0);
+}
+
+// bulk_renew_ttl — data unchanged after renewal
+#[test]
+fn test_bulk_renew_ttl_data_unchanged() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let id = client.register_alert(
+        &owner,
+        &target,
+        &str(&env, "Alert"),
+        &str(&env, "hash"),
+        &vec![&env, str(&env, "rule:transfer")],
+    );
+
+    let before = client.get_alert(&id).unwrap();
+    env.ledger().with_mut(|li| li.timestamp += 100);
+
+    let renewed = client.bulk_renew_ttl(&vec![&env, id]);
+    assert_eq!(renewed, 1);
+
+    let after = client.get_alert(&id).unwrap();
+    assert_eq!(after.label, before.label);
+    assert_eq!(after.webhook_hash, before.webhook_hash);
+    assert_eq!(after.rules, before.rules);
+    assert_eq!(after.active, before.active);
+    assert_eq!(after.updated_at, before.updated_at);
+    assert_eq!(after.created_at, before.created_at);
+}
+
+// bulk_renew_ttl — batch size enforced
+#[test]
+#[should_panic(expected = "batch size exceeds maximum")]
+fn test_bulk_renew_ttl_batch_size_enforced() {
+    let (env, client) = setup();
+    let mut ids: Vec<u64> = vec![&env];
+    for i in 0..101u64 {
+        ids.push_back(i);
+    }
+    client.bulk_renew_ttl(&ids);
+}
+
+// bulk_renew_ttl — emits events for renewed alerts
+#[test]
+fn test_bulk_renew_ttl_emits_events() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let id = client.register_alert(
+        &owner,
+        &target,
+        &str(&env, "Alert"),
+        &str(&env, "hash"),
+        &vec![&env],
+    );
+
+    let before_count = env.events().all().len();
+    client.bulk_renew_ttl(&vec![&env, id]);
+    assert!(env.events().all().len() > before_count);
+}
+
+// bulk_renew_ttl — mixed live and missing IDs renews only live ones
+#[test]
+fn test_bulk_renew_ttl_mixed() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let id1 = client.register_alert(&owner, &target, &str(&env, "A"), &str(&env, "h"), &vec![&env]);
+    let id2 = client.register_alert(&owner, &target, &str(&env, "B"), &str(&env, "h"), &vec![&env]);
+
+    let renewed = client.bulk_renew_ttl(&vec![&env, id1, 999u64, id2]);
+    assert_eq!(renewed, 2);
+}
