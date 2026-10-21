@@ -20,13 +20,45 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add wasm32-unknown-unknown
 
 # Build
-cargo build --release --target wasm32-unknown-unknown
+make build
 
 # Test
-cargo test
+make test
+
+# Lint
+make lint
 
 # Generate TypeScript bindings
 make bindings
+
+# See all available targets
+make help
+```
+
+## Deploying Contracts
+
+Use `scripts/deploy.sh` to deploy both contracts to a target network. The script is
+idempotent: if a contract is already deployed it skips the upload/deploy step and
+runs a post-deploy health check to confirm the contract is callable.
+
+Required environment variables (documented at the top of the script):
+
+| Variable | Description |
+|---|---|
+| `NETWORK` | Target network: `testnet` or `mainnet` |
+| `SOURCE` | Stellar CLI identity used to sign the deploy |
+| `ALERT_REGISTRY_ID` | Existing AlertRegistry contract ID (optional; enables idempotency check) |
+| `WATCHER_REGISTRY_ID` | Existing WatcherRegistry contract ID (optional; enables idempotency check) |
+
+```bash
+# Deploy to testnet
+NETWORK=testnet SOURCE=my-identity ./scripts/deploy.sh
+
+# Re-run against an existing deployment (skips upload, verifies health)
+NETWORK=testnet SOURCE=my-identity \
+  ALERT_REGISTRY_ID=<ALERT_REGISTRY_CONTRACT_ID> \
+  WATCHER_REGISTRY_ID=<WATCHER_REGISTRY_CONTRACT_ID> \
+  ./scripts/deploy.sh
 ```
 
 ## Test Coverage
