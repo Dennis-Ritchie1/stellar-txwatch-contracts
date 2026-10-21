@@ -15,8 +15,7 @@ env.storage().persistent().extend_ttl(&key, DEFAULT_TTL, DEFAULT_TTL);
 ```
 
 This applies to:
-- `DataKey::Alert(id)` — individual alert configs
-- `DataKey::AlertActive(id)` — per-alert active flag
+- `DataKey::Alert(id)` — individual alert configs (the active flag is stored inside `AlertConfig`)
 - `DataKey::OwnerIndex(address)` — per-owner alert ID lists
 - `DataKey::ContractIndex(address)` — per-contract alert ID lists
 
@@ -37,7 +36,7 @@ alert_client.bump_alert(&42u64, &u32::MAX);
 
 The function:
 1. Clamps the requested TTL to `MAX_TTL` (535 680 ledgers).
-2. Extends `Alert`, `AlertActive`, `OwnerIndex`, and `ContractIndex` entries.
+2. Extends `Alert`, `OwnerIndex`, and `ContractIndex` entries.
 3. Emits an `("alert", "bump")` event with `(id, effective_ttl)`.
 
 No auth is required — any address (e.g. an off-chain keeper service) may
@@ -65,12 +64,12 @@ The TTL is extended on every mutating call that touches the entry:
 
 | Function              | Entries extended |
 |-----------------------|-----------------|
-| `register_alert`      | `Alert(id)`, `AlertActive(id)`, `OwnerIndex`, `ContractIndex` |
+| `register_alert`      | `Alert(id)`, `OwnerIndex`, `ContractIndex` |
 | `update_alert`        | `Alert(id)`, `OwnerIndex`, `ContractIndex` |
 | `update_webhook`      | `Alert(id)`, `OwnerIndex`, `ContractIndex` |
 | `update_label`        | `Alert(id)`, `OwnerIndex`, `ContractIndex` |
 | `update_target_contract` | `Alert(id)`, old and new `ContractIndex` |
-| `bump_alert`          | `Alert(id)`, `AlertActive(id)`, `OwnerIndex`, `ContractIndex` |
+| `bump_alert`          | `Alert(id)`, `OwnerIndex`, `ContractIndex` |
 | `remove_alert`        | Entry is deleted (no TTL needed) |
 
 Read-only functions (`get_alert`, `get_alerts_for_contract`, `get_alerts_by_owner`) do **not** extend the TTL.
