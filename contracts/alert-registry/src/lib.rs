@@ -22,9 +22,9 @@ mod contract_tests;
 
 /// Default TTL applied to persistent storage entries on every write.
 ///
-/// Approximately 24 hours at the nominal 5-second ledger close time.
+/// Approximately 7 days at the nominal 5-second ledger close time (#249).
 /// See `docs/ttl.md` for the full rationale.
-pub const DEFAULT_TTL: u32 = 17_280;
+pub const DEFAULT_TTL: u32 = 120_960;
 
 /// Protocol-enforced upper bound on caller-specified TTL values.
 ///
@@ -47,8 +47,6 @@ pub enum DataKey {
     OwnerIndex(Address),
     /// Stores the list of alert IDs watching a given contract address.
     ContractIndex(Address),
-    /// Monotonic counter used to generate unique alert IDs.
-    NextId,
 }
 
 #[contracterror]
@@ -68,6 +66,9 @@ pub enum ContractError {
     InvalidRuleDescriptor = 9,
     OwnerAlertLimitExceeded = 10,
     DuplicateAlertId = 11,
+    /// A storage write failed, for example because an entry exceeds the protocol size limit.
+    /// Returned as a typed error so callers can tell storage saturation from a bug (#251).
+    StorageError = 13,
 }
 
 // ── Data types ───────────────────────────────────────────────────────────────
@@ -75,7 +76,7 @@ pub enum ContractError {
 /// On-chain configuration for a single alert.
 ///
 /// Stored under [`DataKey::Alert`] with a default TTL of [`DEFAULT_TTL`] ledgers
-/// (~24 hours). Use [`AlertRegistry::bump_alert`] to extend up to [`MAX_TTL`].
+/// (~7 days). Use [`AlertRegistry::bump_alert`] to extend up to [`MAX_TTL`].
 /// See `docs/ttl.md` for expiry details.
 #[contracttype]
 #[derive(Clone)]
@@ -117,7 +118,7 @@ pub struct AlertConfig {
 /// functions behave as before.
 ///
 /// # Storage and TTL
-/// All persistent entries are extended by [`DEFAULT_TTL`] ledgers (~24 hours) on every
+/// All persistent entries are extended by [`DEFAULT_TTL`] ledgers (~7 days) on every
 /// write. Callers can extend any alert up to [`MAX_TTL`] ledgers (~31 days) via
 /// [`bump_alert`]. See `docs/ttl.md` for full details.
 #[contract]
@@ -148,6 +149,8 @@ impl AlertRegistry {
             return Err(ContractError::AlreadyInitialized);
         }
         env.storage().instance().set(&symbol_short!("ADMIN"), &admin);
+        // Emit the admin.init event on first initialisation only (#246).
+        env.events().publish((symbol_short!("admin"), symbol_short!("init")), admin);
         Ok(())
     }
 
@@ -160,6 +163,8 @@ impl AlertRegistry {
         admin.require_auth();
         Self::assert_admin(&env, &admin)?;
         env.storage().instance().set(&symbol_short!("ADMIN"), &new_admin);
+        // Record the handover with both addresses, so the audit trail shows who ceded admin (#247).
+        env.events().publish((symbol_short!("admin"), symbol_short!("transfer")), (admin, new_admin));
         Ok(())
     }
 
@@ -180,6 +185,8 @@ impl AlertRegistry {
         admin.require_auth();
         Self::assert_admin(&env, &admin)?;
         env.storage().instance().set(&symbol_short!("LIMIT"), &limit);
+        // Record every limit change on-chain, so the audit trail shows it (#248).
+        env.events().publish((symbol_short!("admin"), symbol_short!("limit")), (admin, limit));
         Ok(())
     }
 
@@ -510,6 +517,8 @@ impl AlertRegistry {
         config_id: u64,
         ttl: u32,
     ) -> Result<(), ContractError> {
+        // Extends all four related entries, so the owner index cannot expire while the alert
+        // is still live and make it disappear from `get_alerts_by_owner` (#254).
         // Clamp the requested TTL to the protocol maximum.
         let effective_ttl = ttl.min(MAX_TTL);
 
@@ -618,7 +627,13 @@ impl AlertRegistry {
     ///
     /// Returns `None` if the alert does not exist or has expired.
     pub fn get_alert(env: Env, config_id: u64) -> Option<AlertConfig> {
-        env.storage().persistent().get(&DataKey::Alert(config_id))
+        let key = DataKey::Alert(config_id);
+        let cfg: Option<AlertConfig> = env.storage().persistent().get(&key);
+        if cfg.is_some() {
+            // A read keeps an alert that is only ever read from archiving (#250).
+            env.storage().persistent().extend_ttl(&key, DEFAULT_TTL, DEFAULT_TTL);
+        }
+        cfg
     }
 
     /// Read the `active` flag of an alert without deserializing the full config.
