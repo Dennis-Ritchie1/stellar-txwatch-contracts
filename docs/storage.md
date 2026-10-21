@@ -12,8 +12,7 @@ Source: `contracts/alert-registry/src/lib.rs`
 
 | Key | Tier | Value Type | Description |
 |---|---|---|---|
-| `DataKey::Alert(id: u64)` | Persistent | `AlertConfig` | A single alert configuration, keyed by its numeric ID |
-| `DataKey::AlertActive(id: u64)` | Persistent | `bool` | The `active` flag stored separately so it can be read without deserializing the full `AlertConfig` (see `get_alert_active`) |
+| `DataKey::Alert(id: u64)` | Persistent | `AlertConfig` | A single alert configuration, keyed by its numeric ID. The `active` flag is stored inside `AlertConfig` |
 | `DataKey::OwnerIndex(addr: Address)` | Persistent | `Vec<u64>` | List of alert IDs owned by a given address |
 | `DataKey::ContractIndex(addr: Address)` | Persistent | `Vec<u64>` | List of alert IDs watching a given contract address |
 | `symbol_short!("NEXT_ID")` | Instance | `u64` | Monotonic counter used to generate unique alert IDs (uses `checked_add(1)`, returning `ContractError::CounterOverflow` on `u64::MAX`) |
@@ -37,12 +36,12 @@ Source: `contracts/alert-registry/src/lib.rs`
 
 ### TTL Behavior
 
-All four persistent key variants (`Alert`, `AlertActive`, `OwnerIndex`, `ContractIndex`) are extended by **100 ledgers** (≈ 8 minutes at 5 s/ledger) on every write that touches them.
+All three persistent key variants (`Alert`, `OwnerIndex`, `ContractIndex`) are extended by **100 ledgers** (≈ 8 minutes at 5 s/ledger) on every write that touches them.
 
 | Function | Keys Extended |
 |---|---|
-| `register_alert` | `Alert(id)`, `AlertActive(id)`, `OwnerIndex(owner)`, `ContractIndex(target)` |
-| `update_alert` | `Alert(id)`, `AlertActive(id)` |
+| `register_alert` | `Alert(id)`, `OwnerIndex(owner)`, `ContractIndex(target)` |
+| `update_alert` | `Alert(id)` |
 | `update_webhook` | `Alert(id)` |
 | `propose_webhook` | `Alert(id)` |
 | `confirm_webhook` | `Alert(id)` |
@@ -83,3 +82,11 @@ There are no persistent storage entries in WatcherRegistry.
 | AlertRegistry | Persistent | `Alert`, `OwnerIndex`, `ContractIndex` | Contract (`extend_ttl`, 100 ledgers) |
 | AlertRegistry | Instance | `NEXT_ID` | Network |
 | WatcherRegistry | Instance | `ADMIN`, `WATCHERS` | Network |
+
+## Source of truth for keys
+
+`AlertRegistry` keys are defined in `contracts/alert-registry/src/lib.rs`, the only module the
+contract compiles from `lib.rs`. `AlertActive(id)` is the separate active flag, and `NEXT_ID`
+is the instance counter. The files `types.rs`, `storage.rs` and `contract.rs` are not declared in
+`lib.rs`, and their older `DataKey` definitions do not apply to the deployed contract. Read this
+document against `lib.rs`, not against those files.

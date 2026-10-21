@@ -92,6 +92,12 @@ impl AlertRegistry {
         config.updated_at = env.ledger().timestamp();
 
         storage::set_alert(&env, config_id, &config);
+
+        env.events().publish(
+            (symbol_short!("alert"), symbol_short!("update")),
+            (config_id, owner, active),
+        );
+
         Ok(())
     }
 
@@ -113,6 +119,12 @@ impl AlertRegistry {
         config.updated_at = env.ledger().timestamp();
 
         storage::set_alert(&env, config_id, &config);
+
+        env.events().publish(
+            (symbol_short!("alert"), symbol_short!("update")),
+            (config_id, owner, active),
+        );
+
         Ok(())
     }
 
