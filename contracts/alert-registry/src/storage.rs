@@ -1,4 +1,4 @@
-use soroban_sdk::{symbol_short, vec, Address, Env, Vec};
+﻿use soroban_sdk::{symbol_short, vec, Address, Env, Vec};
 
 use crate::types::{AlertConfig, ContractError, DataKey};
 use crate::{DEFAULT_TTL, RATE_LIMIT_COUNT, RATE_LIMIT_WINDOW};
@@ -23,10 +23,35 @@ pub fn next_id(env: &Env) -> Result<u64, ContractError> {
         .unwrap_or(0u64);
     let next = id.checked_add(1).ok_or(ContractError::CounterOverflow)?;
     env.storage().persistent().set(&DataKey::NextId, &next);
+    // Use DEFAULT_TTL so the counter survives as long as the alert data it
+    // belongs to.  The previous hard-coded 100-ledger bump was far too short —
+    // a contract that only receives TTL renewals (no new registrations) would
+    // let NextId expire and then restart from 0 on the next registration,
+    // producing ID collisions.  See issue #212.
     env.storage()
         .persistent()
-        .extend_ttl(&DataKey::NextId, 100, 100);
+        .extend_ttl(&DataKey::NextId, DEFAULT_TTL, DEFAULT_TTL);
     Ok(id)
+}
+
+/// Extend the TTL of the global alert ID counter to [`DEFAULT_TTL`].
+///
+/// Callers that keep alert data alive (e.g. [`crate::contract::renew_alert_ttl`]
+/// and [`crate::lib::bump_alert`]) **must** also call this function so that the
+/// `NextId` counter cannot expire independently of the alert entries it tracks.
+///
+/// If `NextId` expires while alert data is still live the next call to
+/// `register_alert` would restart the counter from `0`, silently reusing IDs
+/// that are already in use and causing ID collisions (see issue #212).
+///
+/// This is a no-op when `NextId` is not yet in storage (counter never
+/// initialised), so it is safe to call unconditionally.
+pub fn extend_next_id_ttl(env: &Env) {
+    if env.storage().persistent().has(&DataKey::NextId) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::NextId, DEFAULT_TTL, DEFAULT_TTL);
+    }
 }
 
 // ── Alert CRUD ────────────────────────────────────────────────────────────────
@@ -270,3 +295,4 @@ pub fn check_rate_limit(env: &Env, owner: &Address) -> Result<(), ContractError>
         .extend_ttl(&key, DEFAULT_TTL, DEFAULT_TTL);
     Ok(())
 }
+

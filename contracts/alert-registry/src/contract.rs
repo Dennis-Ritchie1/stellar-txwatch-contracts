@@ -1,4 +1,4 @@
-//! Secondary (non-active) AlertRegistry implementation.
+﻿//! Secondary (non-active) AlertRegistry implementation.
 //!
 //! This module contains a clean, modular implementation of the AlertRegistry
 //! contract logic backed by the `storage` and `types` modules.  It is **not**
@@ -254,6 +254,10 @@ impl AlertRegistry {
         // Extend both index entries so they stay alive as long as the alert.
         storage::extend_owner_index_ttl(&env, &config.owner);
         storage::extend_contract_index_ttl(&env, &config.target_contract);
+        // Extend the global ID counter so it cannot expire independently of
+        // the alert data.  If NextId expires and the next registration restarts
+        // from 0, it would collide with existing alert IDs.  See issue #212.
+        storage::extend_next_id_ttl(&env);
 
         Ok(())
     }
@@ -548,3 +552,4 @@ mod tests {
         assert_eq!(client.get_alert_count_for_contract(&target_b), 1u32);
     }
 }
+
