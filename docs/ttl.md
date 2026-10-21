@@ -101,3 +101,17 @@ env.storage().persistent().extend_ttl(&DataKey::Alert(id), 120_960, 120_960);
 
 - [Soroban State Archival](https://developers.stellar.org/docs/learn/encyclopedia/storage/state-archival)
 - [Soroban Storage TTL Reference](https://developers.stellar.org/docs/build/smart-contracts/getting-started/storing-data)
+
+## Finding alerts close to expiry (keepers)
+
+The contract cannot read an entry's remaining TTL, so `get_alerts_expiring_soon` is not added
+on-chain. A keeper finds near-expiry alerts client-side:
+
+1. Keep the list of alert IDs it cares about, from `get_alerts_by_owner_paginated` or
+   `get_contract_alerts_paginated`.
+2. Read each entry's live TTL from Soroban RPC (`getLedgerEntries` reports `liveUntilLedgerSeq`).
+3. Compare `liveUntilLedgerSeq` with the current ledger. Renew with `renew_alert_ttl` any alert whose
+   remainder is below the keeper's threshold, and renew the soonest ones first.
+
+Adding an on-chain `last_renewed` field was considered and rejected. It would duplicate the
+TTL the network already tracks, and it would not show archival, which is what matters.

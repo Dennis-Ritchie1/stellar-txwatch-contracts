@@ -82,3 +82,11 @@ There are no persistent storage entries in WatcherRegistry.
 | AlertRegistry | Persistent | `Alert`, `OwnerIndex`, `ContractIndex` | Contract (`extend_ttl`, 100 ledgers) |
 | AlertRegistry | Instance | `NEXT_ID` | Network |
 | WatcherRegistry | Instance | `ADMIN`, `WATCHERS` | Network |
+
+## Source of truth for keys
+
+`AlertRegistry` keys are defined in `contracts/alert-registry/src/lib.rs`, the only module the
+contract compiles from `lib.rs`. `AlertActive(id)` is the separate active flag, and `NEXT_ID`
+is the instance counter. The files `types.rs`, `storage.rs` and `contract.rs` are not declared in
+`lib.rs`, and their older `DataKey` definitions do not apply to the deployed contract. Read this
+document against `lib.rs`, not against those files.
