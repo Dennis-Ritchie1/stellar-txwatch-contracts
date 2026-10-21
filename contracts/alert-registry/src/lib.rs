@@ -18,6 +18,9 @@ pub enum _InvalidWebhookHashContractError {
 #[path = "tests.rs"]
 mod contract_tests;
 
+#[cfg(test)]
+mod error_variant_tests;
+
 // ── TTL constants ─────────────────────────────────────────────────────────────
 
 /// Default TTL applied to persistent storage entries on every write.
@@ -1039,7 +1042,8 @@ impl AlertRegistry {
         let mut out: Vec<AlertConfig> = vec![env];
         let len = ids.len();
         let start = offset.min(len);
-        let end = (offset + limit).min(len);
+        // saturating_add: a huge offset must not overflow the end bound (#265).
+        let end = offset.saturating_add(limit).min(len);
         for i in start..end {
             let id = ids.get(i).unwrap();
             if let Some(cfg) = env.storage().persistent().get(&DataKey::Alert(id)) {
