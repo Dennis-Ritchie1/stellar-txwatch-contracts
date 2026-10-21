@@ -1,102 +1,152 @@
 # @tx-wat/watcher-registry
 
-TypeScript bindings for the **WatcherRegistry** Soroban smart contract,
-part of the [stellar-txwatch-contracts](https://github.com/Tx-wat/stellar-txwatch-contracts)
-project.
+[![npm version](https://img.shields.io/npm/v/@tx-wat/watcher-registry.svg)](https://www.npmjs.com/package/@tx-wat/watcher-registry)
 
-These bindings are generated from the compiled WASM contract spec using
-[`stellar contract bindings typescript`](https://developers.stellar.org/docs/tools/developer-tools/cli/stellar-cli)
-and published automatically on every GitHub release.
+TypeScript bindings for the WatcherRegistry Soroban smart contract.
 
-## Installation
+## Install
 
-```bash
-npm install @tx-wat/watcher-registry @stellar/stellar-sdk
+```sh
+npm install @tx-wat/watcher-registry
 ```
+
+## Testnet contract ID
+
+The testnet contract ID is exposed via `networks.testnet.contractId` and is
+overlaid at publish time from `DEPLOYMENTS.md`. See that file for the current
+deployed address.
 
 ## Usage
 
-```typescript
-import {
-  Client,
-  networks,
-} from "@tx-wat/watcher-registry";
-import { Keypair, Networks } from "@stellar/stellar-sdk";
+All examples below import from the package root, initialize a `Client` against
+testnet, perform a typed contract call, and read the result. Every call is
+wrapped in `try/catch` to surface the generated error types.
 
-// Connect to testnet
+### 1. Initialize the registry
+
+```ts
+import { Client, networks } from "@tx-wat/watcher-registry";
+
 const client = new Client({
   contractId: networks.testnet.contractId,
-  networkPassphrase: Networks.TESTNET,
-  rpcUrl: "https://soroban-testnet.stellar.org",
+  networkPassphrase: networks.testnet.networkPassphrase,
+  rpcUrl: networks.testnet.rpcUrl,
 });
 
-// Check if a watcher is authorized (read-only, no signing needed)
-const result = await client.is_authorized({
-  watcher: "GABC...XYZ",
+try {
+  const admin = "G...ADMIN_ADDRESS";
+  const tx = await client.initialize({ admin });
+  const result = await tx.signAndSend();
+  console.log("initialized:", result);
+} catch (err) {
+  console.error("initialize failed:", err);
+}
+```
+
+### 2. Add / remove an admin
+
+```ts
+import { Client, networks } from "@tx-wat/watcher-registry";
+
+const client = new Client({
+  contractId: networks.testnet.contractId,
+  networkPassphrase: networks.testnet.networkPassphrase,
+  rpcUrl: networks.testnet.rpcUrl,
 });
-console.log("authorized:", result.result);
 
-// Register a watcher (requires admin keypair)
-const adminKeypair = Keypair.fromSecret(process.env.ADMIN_SECRET!);
-const tx = await client.register_watcher(
-  {
-    admin: adminKeypair.publicKey(),
-    watcher: "GWATCHER...ADDRESS",
-  },
-  { signTransaction: (xdr) => adminKeypair.sign(xdr) },
-);
-await tx.signAndSend();
+try {
+  const admin = "G...NEW_ADMIN_ADDRESS";
+  const addTx = await client.add_admin({ admin });
+  const addResult = await addTx.signAndSend();
+  console.log("admin added:", addResult);
 
-// Get all authorized watchers
-const watchers = await client.get_watchers();
-console.log("watchers:", watchers.result);
+  const removeTx = await client.remove_admin({ admin });
+  const removeResult = await removeTx.signAndSend();
+  console.log("admin removed:", removeResult);
+} catch (err) {
+  console.error("admin update failed:", err);
+}
 ```
 
-## API
+### 3. Register and remove a watcher
 
-All public contract functions are exposed as async methods on the `Client`
-class. The method signatures mirror the Soroban contract interface exactly.
+```ts
+import { Client, networks } from "@tx-wat/watcher-registry";
 
-| Method | Auth required | Description |
-|---|---|---|
-| `initialize(admin)` | `admin` | Initialize the registry (once only) |
-| `register_watcher(admin, watcher)` | `admin` | Authorize a watcher address |
-| `remove_watcher(admin, watcher)` | `admin` | Revoke a watcher address |
-| `is_authorized(watcher)` | — | Check if an address is authorized |
-| `get_watchers()` | — | Return all authorized watcher addresses |
-| `add_admin(caller, new_admin)` | `caller` (admin) | Add a new admin |
-| `remove_admin(caller, target_admin)` | `caller` (admin) | Remove an admin |
-| `transfer_admin(admin, new_admin)` | `admin` | Replace the entire admin set |
-| `get_admins()` | — | Return all current admin addresses |
-| `get_admin()` | — | Return the primary admin address |
-| `is_admin(address)` | — | Check if an address is an admin (returns false if uninitialized) |
+const client = new Client({
+  contractId: networks.testnet.contractId,
+  networkPassphrase: networks.testnet.networkPassphrase,
+  rpcUrl: networks.testnet.rpcUrl,
+});
 
-## Network addresses
+try {
+  const watcher = "G...WATCHER_ADDRESS";
+  const registerTx = await client.register_watcher({ watcher });
+  const registerResult = await registerTx.signAndSend();
+  console.log("watcher registered:", registerResult);
 
-| Network | Contract ID |
-|---|---|
-| Testnet | See [DEPLOYMENTS.md](https://github.com/Tx-wat/stellar-txwatch-contracts/blob/main/DEPLOYMENTS.md) |
-| Mainnet | See [DEPLOYMENTS.md](https://github.com/Tx-wat/stellar-txwatch-contracts/blob/main/DEPLOYMENTS.md) |
-
-## Generating bindings locally
-
-If you need to regenerate the bindings against a specific contract deployment:
-
-```bash
-# From the repo root
-cargo build --release --target wasm32-unknown-unknown
-
-stellar contract bindings typescript \
-  --wasm target/wasm32-unknown-unknown/release/watcher_registry.wasm \
-  --contract-id <WATCHER_REGISTRY_CONTRACT_ID> \
-  --output-dir bindings/watcher-registry \
-  --overwrite
-
-cd bindings/watcher-registry
-npm install
-npm run build
+  const removeTx = await client.remove_watcher({ watcher });
+  const removeResult = await removeTx.signAndSend();
+  console.log("watcher removed:", removeResult);
+} catch (err) {
+  console.error("watcher update failed:", err);
+}
 ```
 
-## License
+### 4. Check authorization (is_authorized)
 
-MIT — see [LICENSE](../../LICENSE).
+```ts
+import { Client, networks } from "@tx-wat/watcher-registry";
+
+const client = new Client({
+  contractId: networks.testnet.contractId,
+  networkPassphrase: networks.testnet.networkPassphrase,
+  rpcUrl: networks.testnet.rpcUrl,
+});
+
+try {
+  const watcher = "G...WATCHER_ADDRESS";
+  const authorized = await client.is_authorized({ watcher });
+  console.log("authorized:", authorized); // boolean
+} catch (err) {
+  console.error("is_authorized failed:", err);
+}
+```
+
+### 5. List all watchers (get_all_watchers)
+
+```ts
+import { Client, networks } from "@tx-wat/watcher-registry";
+
+const client = new Client({
+  contractId: networks.testnet.contractId,
+  networkPassphrase: networks.testnet.networkPassphrase,
+  rpcUrl: networks.testnet.rpcUrl,
+});
+
+try {
+  const watchers = await client.get_all_watchers();
+  console.log("watchers:", watchers); // string[]
+} catch (err) {
+  console.error("get_all_watchers failed:", err);
+}
+```
+
+### 6. Get watcher count
+
+```ts
+import { Client, networks } from "@tx-wat/watcher-registry";
+
+const client = new Client({
+  contractId: networks.testnet.contractId,
+  networkPassphrase: networks.testnet.networkPassphrase,
+  rpcUrl: networks.testnet.rpcUrl,
+});
+
+try {
+  const count = await client.get_watcher_count();
+  console.log("watcher count:", count); // number
+} catch (err) {
+  console.error("get_watcher_count failed:", err);
+}
+```

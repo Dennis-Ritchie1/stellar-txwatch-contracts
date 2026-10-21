@@ -95,3 +95,61 @@ npm run build
 ## License
 
 MIT
+
+## TypeScript examples
+
+These examples use the methods that the compiled `AlertRegistry` provides. The generated client
+is built from the WASM, so re-check the exact method names and argument shapes after you
+regenerate the bindings.
+
+### 1. Set up a client
+
+```typescript
+import { Client, networks } from "@tx-wat/alert-registry-bindings";
+
+const client = new Client({
+  contractId: process.env.ALERT_REGISTRY_ID!,
+  networkPassphrase: networks.testnet.networkPassphrase,
+  rpcUrl: "https://soroban-testnet.stellar.org",
+});
+```
+
+### 2. Register an alert
+
+```typescript
+const tx = await client.register_alert({
+  owner,                 // G... address of the alert owner
+  target_contract,       // C... contract the alert watches
+  label: "Large transfer",
+  webhook_hash: "hash",  // see docs/alert-registry.md for the hash scheme
+  rules: ["rule:transfer"],
+});
+const { result: id } = await tx.signAndSend();
+```
+
+### 3. Update an alert
+
+```typescript
+await (await client.update_alert({
+  caller: owner,
+  config_id: id,
+  rules: ["rule:transfer", "rule:mint"],
+  active: true,
+})).signAndSend();
+```
+
+### 4. Read an alert
+
+```typescript
+const { result: alert } = await client.get_alert({ config_id: id });
+console.log(alert?.label, alert?.active);
+```
+
+### 5. Remove an alert
+
+```typescript
+await (await client.remove_alert({ caller: owner, config_id: id })).signAndSend();
+```
+
+Rule strings must be `rule:transfer` or `rule:mint`. Any other value is refused with
+`InvalidRuleDescriptor`.

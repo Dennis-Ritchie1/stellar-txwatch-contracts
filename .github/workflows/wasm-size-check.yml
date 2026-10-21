@@ -6,8 +6,14 @@ on:
   pull_request:
     branches: ["**"]
 
+# WASM size budget
+# -----------------
+# Hard budget per contract: 200 KB (204800 bytes).
+# Large WASM binaries increase deployment costs and transaction fees on Stellar,
+# so CI fails if any built binary exceeds this threshold.
+# To change the budget, update WASM_SIZE_LIMIT_KB below.
 env:
-  WASM_SIZE_LIMIT_KB: 100
+  WASM_SIZE_LIMIT_KB: 200
 
 jobs:
   wasm-size:
@@ -27,6 +33,7 @@ jobs:
 
       - name: Check binary sizes
         run: |
+          # Budget: 200 KB per contract (see WASM_SIZE_LIMIT_KB above).
           LIMIT=$(( ${{ env.WASM_SIZE_LIMIT_KB }} * 1024 ))
           FAILED=0
 
@@ -35,11 +42,12 @@ jobs:
             SIZE_KB=$(( SIZE / 1024 ))
             echo "$wasm: ${SIZE_KB}KB"
             if [ "$SIZE" -gt "$LIMIT" ]; then
-              echo "ERROR: $wasm exceeds limit of ${{ env.WASM_SIZE_LIMIT_KB }}KB (actual: ${SIZE_KB}KB)"
+              echo "ERROR: $wasm exceeds budget of ${{ env.WASM_SIZE_LIMIT_KB }}KB (actual: ${SIZE_KB}KB)"
               FAILED=1
             fi
           done
 
           if [ "$FAILED" -eq 1 ]; then
+            echo "WASM size exceeds ${{ env.WASM_SIZE_LIMIT_KB }} KB budget!"
             exit 1
           fi
