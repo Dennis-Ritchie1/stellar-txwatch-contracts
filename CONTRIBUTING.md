@@ -46,6 +46,29 @@ bash scripts/deploy.sh
 
 3. Update `DEPLOYMENTS.md` with the printed contract addresses.
 
+## Changelog Updates
+
+Every PR that changes contract behavior, adds a function, or fixes a bug must
+include a `CHANGELOG.md` update. Read-only changes (docs, tests, CI) are
+optional but encouraged.
+
+1. Add entries under the `[Unreleased]` section.
+2. Use one of the categories: **Added**, **Fixed**, **Changed**, **Deprecated**,
+   **Removed**, **Security**.
+3. Reference the issue number at the end of the entry, e.g. `(#123)`.
+
+Example entry:
+
+```markdown
+## [Unreleased]
+
+### Added
+- `rule:burn` descriptor accepted by `validate_rules` (#123)
+
+### Fixed
+- Reject unauthorized `set_admin` calls (#124)
+```
+
 ## Adding a New Function to an Existing Contract
 
 1. Add the function inside the `#[contractimpl]` block in `contracts/<name>/src/lib.rs`.
@@ -53,6 +76,42 @@ bash scripts/deploy.sh
 3. Add at least one test in the `#[cfg(test)]` module covering the happy path and any auth rejection.
 4. Run `cargo test` to confirm everything passes.
 5. Update the relevant doc in `docs/`.
+
+## Adding a New Rule Descriptor
+
+Rule descriptors (e.g. `rule:invoke`, `rule:burn`) are the identifiers that
+contracts emit and the off-chain watcher matches against. Adding a new one
+spans several layers, so follow the full process below. See
+[docs/contributing-contracts.md](docs/contributing-contracts.md#adding-a-new-rule-descriptor)
+for the detailed guide.
+
+1. **Propose** — open an issue describing the descriptor name, its semantics,
+   and the use case it enables. Get agreement before writing code.
+2. **Contract change** — add the descriptor to the `validate_rules` allow-list
+   in the relevant contract so it is accepted by validation.
+3. **Watcher change** — implement the matching logic for the descriptor in
+   [`stellar-txwatch-core`](https://github.com/Tx-wat/stellar-txwatch-core).
+4. **Docs** — update the rule descriptor table in `docs/alert-registry.md`.
+5. **Test** — add a unit test in the contract and an integration test in the
+   core watcher.
+6. **TypeScript** — regenerate the bindings if the type surface changes.
+
+### PR Template for New Rule Descriptors
+
+When opening a PR that adds a rule descriptor, use this checklist in the PR
+body:
+
+```markdown
+## New Rule Descriptor: `rule:<name>`
+
+- [ ] Proposal issue linked (name, semantics, use case)
+- [ ] Descriptor added to `validate_rules` allow-list
+- [ ] Matching logic implemented in `stellar-txwatch-core`
+- [ ] `docs/alert-registry.md` rule descriptor table updated
+- [ ] Contract unit test added
+- [ ] Core integration test added
+- [ ] TypeScript bindings regenerated (if type surface changed)
+```
 
 ## Sister Repos
 

@@ -16,6 +16,7 @@
 - [ ] My code follows the repository style
 - [ ] I have added relevant tests (unit / integration)
 - [ ] I have updated or added documentation if necessary
+- [ ] I have updated `CHANGELOG.md` under `[Unreleased]` (required for contract behavior changes, new functions, and bug fixes; optional but encouraged for docs/tests/CI)
 - [ ] All CI checks pass
 
 ## Testing notes
@@ -23,5 +24,10 @@
 
 ## Release notes / changelog
 - Short note for changelog if this should be documented for release.
+- Example entry format (see the "Changelog Updates" section in `CONTRIBUTING.md`):
+  ```
+  ### Added
+  - New `transfer_with_memo` entry point (#123)
+  ```
 
 If you'd like help polishing this PR or splitting into smaller changes, ask maintainers.
