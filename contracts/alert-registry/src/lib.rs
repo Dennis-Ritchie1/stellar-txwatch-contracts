@@ -424,12 +424,20 @@ impl AlertRegistry {
     /// # Auth
     /// Requires a valid Stellar auth signature from `caller`, who must also be
     /// the original owner of the alert.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::InvalidWebhookHash`] if `webhook_hash` is not
+    /// exactly 64 characters (the expected length of a SHA-256 hex digest).
     pub fn update_webhook(
         env: Env,
         caller: Address,
         config_id: u64,
         webhook_hash: String,
     ) -> Result<(), ContractError> {
+        if webhook_hash.len() != 64 {
+            return Err(ContractError::InvalidWebhookHash);
+        }
+
         caller.require_auth();
 
         let mut config: AlertConfig = env
@@ -457,8 +465,8 @@ impl AlertRegistry {
             .extend_ttl(&DataKey::ContractIndex(config.target_contract.clone()), DEFAULT_TTL, DEFAULT_TTL);
 
         env.events().publish(
-            (symbol_short!("alert"), symbol_short!("update")),
-            (config_id, caller, active),
+            (symbol_short!("alert"), symbol_short!("webhook")),
+            (config_id, caller),
         );
 
         Ok(())
