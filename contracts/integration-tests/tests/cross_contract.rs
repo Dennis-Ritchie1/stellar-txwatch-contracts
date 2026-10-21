@@ -29,7 +29,7 @@ fn test_authorized_watcher_can_query_alert_registry_open_mode() {
         &owner,
         &target,
         &str(&env, "Cross-contract alert"),
-        &str(&env, "webhook-hash-abc"),
+        &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         &vec![&env, str(&env, "rule:transfer")],
     );
 
@@ -82,8 +82,8 @@ fn test_removed_watcher_loses_authorization_alert_data_intact() {
         &owner,
         &target,
         &str(&env, "Alert"),
-        &str(&env, "hash"),
-        &vec![&env],
+        &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        &vec![&env, String::from_str(&env, "rule:transfer")],
     );
 
     // Remove the watcher
@@ -125,7 +125,7 @@ fn test_watcher_gating_registered_watcher_can_read() {
         &owner,
         &target,
         &String::from_str(&env, "Gated Alert"),
-        &String::from_str(&env, "hash"),
+        &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         &vec![&env, String::from_str(&env, "rule:transfer")],
     );
 
@@ -163,8 +163,8 @@ fn test_watcher_gating_unregistered_address_rejected() {
         &owner,
         &target,
         &String::from_str(&env, "Alert"),
-        &String::from_str(&env, "hash"),
-        &vec![&env],
+        &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        &vec![&env, String::from_str(&env, "rule:transfer")],
     );
 
     assert_eq!(
@@ -199,8 +199,8 @@ fn test_watcher_gating_removed_watcher_loses_access() {
         &owner,
         &target,
         &String::from_str(&env, "Alert"),
-        &String::from_str(&env, "hash"),
-        &vec![&env],
+        &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        &vec![&env, String::from_str(&env, "rule:transfer")],
     );
 
     // Watcher can read before removal
@@ -249,8 +249,8 @@ fn test_watcher_gating_get_alerts_by_owner() {
         &owner,
         &target,
         &String::from_str(&env, "Alert"),
-        &String::from_str(&env, "hash"),
-        &vec![&env],
+        &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        &vec![&env, String::from_str(&env, "rule:transfer")],
     );
 
     // Registered watcher can query by owner
@@ -331,8 +331,8 @@ fn test_remove_watcher_event_and_immediate_access_revocation() {
         &owner,
         &target,
         &String::from_str(&env, "Alert"),
-        &String::from_str(&env, "hash"),
-        &vec![&env],
+        &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        &vec![&env, String::from_str(&env, "rule:transfer")],
     );
 
     // Watcher can read before removal
@@ -382,8 +382,8 @@ fn test_bump_alert_by_third_party() {
         &owner,
         &target,
         &String::from_str(&env, "Long-lived Alert"),
-        &String::from_str(&env, "hash"),
-        &vec![&env],
+        &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        &vec![&env, String::from_str(&env, "rule:transfer")],
     );
 
     let before = alert_client.get_alert(&id).unwrap();

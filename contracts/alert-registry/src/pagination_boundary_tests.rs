@@ -19,13 +19,15 @@ fn setup() -> (Env, AlertRegistryClient<'static>, Address) {
 
     let owner = Address::generate(&env);
     let target = Address::generate(&env);
-    for i in 0..5 {
-        let label = String::from_str(&env, &format!("a{i}"));
+    // Labels a0..a4 in ID order — used by page-content assertions below.
+    let labels = ["a0", "a1", "a2", "a3", "a4"];
+    for label_str in labels {
+        let label = String::from_str(&env, label_str);
         client.register_alert(
             &owner,
             &target,
             &label,
-            &String::from_str(&env, "hash"),
+            &String::from_str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
             &vec![&env, String::from_str(&env, "rule:transfer")],
         );
     }
