@@ -346,6 +346,12 @@ impl AlertRegistry {
         env.storage()
             .persistent()
             .extend_ttl(&DataKey::ContractIndex(config.target_contract.clone()), DEFAULT_TTL, DEFAULT_TTL);
+
+        env.events().publish(
+            (symbol_short!("alert"), symbol_short!("update")),
+            (config_id, caller, active),
+        );
+
         Ok(())
     }
 
@@ -385,6 +391,12 @@ impl AlertRegistry {
         env.storage()
             .persistent()
             .extend_ttl(&DataKey::ContractIndex(config.target_contract.clone()), DEFAULT_TTL, DEFAULT_TTL);
+
+        env.events().publish(
+            (symbol_short!("alert"), symbol_short!("update")),
+            (config_id, caller, active),
+        );
+
         Ok(())
     }
 
@@ -1128,6 +1140,29 @@ mod tests {
         let cfg = client.get_alert(&id).unwrap();
         assert!(!cfg.active);
         assert_eq!(cfg.rules.get(0).unwrap(), str(&env, "rule:mint"));
+
+        // Verify alert.update event was emitted
+        assert!(env.events().all().len() >= 2);
+    }
+
+    #[test]
+    fn test_update_alert_emits_event() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+
+        let id = client.register_alert(
+            &owner,
+            &target,
+            &str(&env, "Alert"),
+            &str(&env, "hash"),
+            &vec![&env, str(&env, "rule:transfer")],
+        );
+
+        let count_before = env.events().all().len();
+        client.update_alert(&owner, &id, &vec![&env, str(&env, "rule:mint")], &false);
+        let count_after = env.events().all().len();
+        assert_eq!(count_after, count_before + 1);
     }
 
     // 3. Happy path — remove alert
