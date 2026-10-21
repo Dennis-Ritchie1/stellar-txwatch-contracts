@@ -49,6 +49,24 @@ After running `scripts/deploy.sh`, replace the placeholder values with the print
 
 ---
 
+## Expected WASM Hashes
+
+`scripts/verify.sh` compares the on-chain WASM hash of each deployed contract against the values below.  
+After building with `cargo build --target wasm32-unknown-unknown --release`, record the hash of each artifact:
+
+```bash
+sha256sum target/wasm32-unknown-unknown/release/*.wasm
+```
+
+| Contract | WASM Hash (sha256) |
+|---|---|
+| Alert Registry | `XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` |
+| Watcher Registry | `XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX` |
+
+> Replace the `XXXX...` placeholders with the hashes of the deployed artifacts and commit the update alongside the addresses.
+
+---
+
 ## How to Update This File
 
 1. Run the deploy script:
@@ -57,7 +75,8 @@ After running `scripts/deploy.sh`, replace the placeholder values with the print
    ```
 2. Copy the contract addresses printed at the end of the script output.
 3. Replace the corresponding `CXXX...` placeholders in the table above.
-4. Commit the update:
+4. Record the deployed WASM hashes in the **Expected WASM Hashes** table above.
+5. Commit the update:
    ```bash
    git add DEPLOYMENTS.md
    git commit -m "deploy: update contract addresses for <network> (<date>)"
