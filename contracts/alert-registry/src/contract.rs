@@ -317,8 +317,11 @@ impl AlertRegistry {
         Ok(())
     }
 
-    /// Get the configured per-owner active alert limit, or `0` if none is set.
-    pub fn get_per_owner_alert_limit(env: Env) -> u32 {
+    /// Get the configured per-owner active alert limit.
+    ///
+    /// Returns `None` when no limit has been set, `Some(0)` when the admin
+    /// explicitly configured `0` (unlimited), and `Some(n)` for `n > 0`.
+    pub fn get_per_owner_alert_limit(env: Env) -> Option<u32> {
         storage::get_limit(&env)
     }
 
@@ -430,7 +433,7 @@ fn assert_admin(env: &Env, caller: &Address) -> Result<(), ContractError> {
 }
 
 fn assert_per_owner_limit(env: &Env, owner: &Address) -> Result<(), ContractError> {
-    let limit = storage::get_limit(env);
+    let limit = storage::get_limit(env).unwrap_or(0);
     if limit > 0 {
         let ids = storage::owner_index(env, owner);
         let mut count: u32 = 0;
@@ -546,5 +549,26 @@ mod tests {
 
         assert_eq!(client.get_alert_count_for_contract(&target_a), 2u32);
         assert_eq!(client.get_alert_count_for_contract(&target_b), 1u32);
+    }
+
+    #[test]
+    fn test_per_owner_alert_limit_unset_vs_zero_vs_n() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+
+        // Unset: no limit configured yet.
+        assert_eq!(client.get_per_owner_alert_limit(), None);
+
+        // Explicitly set to 0 (unlimited).
+        client
+            .set_per_owner_alert_limit(&admin, &0u32)
+            .unwrap();
+        assert_eq!(client.get_per_owner_alert_limit(), Some(0u32));
+
+        // Set to a positive limit.
+        client
+            .set_per_owner_alert_limit(&admin, &5u32)
+            .unwrap();
+        assert_eq!(client.get_per_owner_alert_limit(), Some(5u32));
     }
 }
