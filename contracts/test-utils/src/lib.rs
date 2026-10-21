@@ -69,3 +69,17 @@ pub fn setup_both() -> (
     let watcher_client = WatcherRegistryClient::new(&env, &watcher_id);
     (env, alert_client, watcher_client)
 }
+
+// ── Registration helpers ──────────────────────────────────────────────────────
+
+/// Register an alert on `client` for `owner` targeting `target`.
+///
+/// Returns the id assigned to the newly created alert.
+pub fn register_alert(
+    client: &AlertRegistryClient,
+    env: &Env,
+    owner: &Address,
+    target: &Address,
+) -> u64 {
+    client.register(owner, target, &str(env, "test alert"))
+}

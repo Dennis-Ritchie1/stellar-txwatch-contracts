@@ -1,67 +1,51 @@
----
-title: Contributing (Contracts)
----
+# Contributing Contracts
 
-# Contributing to Contracts (Soroban-specific)
+This guide covers how to contribute to the Soroban contracts in this repository.
 
-This guide gives contributor-focused advice for writing and reviewing smart-contract code for this repository (Soroban / Rust).
+## Getting Started
 
-## Principles
-- Keep contracts minimal and auditable: small surface area reduces security risk.
-- Be explicit about authorization: require and document who can call admin-only entrypoints.
-- Optimize for storage cost and cleanup: persistent storage is paid for and permanent until removed.
+1. Fork the repository and create a feature branch.
+2. Install the Rust toolchain and `cargo`.
+3. Run the existing test suite before making changes.
 
-## Authorization patterns
-- Use host `env.require_auth()` early in entrypoints to assert signer privileges.
-- Prefer capability-based checks (explicit addresses or allowlists) over implicit assumptions.
-- Example pattern:
+## General Contract Contributions
 
-```rust
-// At start of public entrypoint
-env.require_auth(&admin_address);
-// proceed with state mutation
+- Keep changes focused and minimal.
+- Match existing module structure, naming, and error handling.
+- Add or update tests for any behavior change.
+- Update documentation when the public surface changes.
+
+## Adding a New Rule Descriptor
+
+Rule descriptors (for example `rule:invoke`, `rule:burn`) are the string tags that
+contracts and the off-chain watcher use to identify a rule's semantics. Adding a
+new descriptor touches several layers, so follow the full process below.
+
+1. **Propose** — open an issue describing the descriptor name, its semantics, and
+the use case it enables. Get agreement on the name and meaning before writing code.
+2. **Contract change** — add the descriptor to the `validate_rules` allow-list in
+the contract so it is accepted during validation.
+3. **Watcher change** — implement the matching logic for the descriptor in
+`stellar-txwatch-core` so the off-chain watcher can act on it.
+4. **Docs** — update the rule descriptor table in `docs/alert-registry.md` to
+document the new descriptor.
+5. **Test** — add a unit test in the contract covering validation of the new
+descriptor, and an integration test in the core crate covering the watcher logic.
+6. **TypeScript** — regenerate the TypeScript bindings if the type surface changes.
+
+### Example PR Template for New Rule Descriptors
+
+When opening a PR that adds a new rule descriptor, include the following checklist
+in the PR description:
+
+```markdown
+## New Rule Descriptor: `rule:<name>`
+
+- [ ] Proposal issue linked (name, semantics, use case)
+- [ ] Descriptor added to `validate_rules` allow-list in the contract
+- [ ] Matching logic implemented in `stellar-txwatch-core`
+- [ ] `docs/alert-registry.md` rule descriptor table updated
+- [ ] Contract unit test added
+- [ ] Core integration test added
+- [ ] TypeScript bindings regenerated (if the type surface changed)
 ```
-
-- For multi-signature or timelock patterns, implement clear on-chain checks and fail closed.
-
-## Storage tiers & keys
-- Separate key namespaces by purpose (e.g. `meta:...`, `data:...`, `index:...`) to avoid collisions.
-- Keep keys compact (fixed-size bytes where possible) — long strings increase storage cost.
-- Avoid storing large vectors or blobs in a single key; use paginated indices if needed.
-- When storing mappings, also store reverse/index keys to support efficient queries and deletions.
-
-## TTL / expiration management
-- Soroban does not automatically expire contract storage. Implement TTL by storing an expiration ledger sequence alongside the value.
-- Enforce TTL on reads: treat expired items as non-existent and optionally clean them up lazily.
-- Provide a public `cleanup_expired()` function that can be called to reclaim storage and keep costs bounded.
-
-Example TTL approach:
-
-```rust
-// store: (value, expires_at_ledger)
-// read path: if now_ledger > expires_at => treat missing
-// cleanup path: caller iterates keys and removes expired entries
-```
-
-## Gas & performance
-- Minimize storage writes — each write increases cost. Batch writes only when necessary.
-- Prefer integer or compact encodings for on-chain counters and timestamps.
-- Avoid unbounded loops in contract entrypoints; make expensive maintenance work callable separately and resumable.
-
-## Testing and audits
-- Add unit tests for all auth checks, edge cases, and TTL behavior. Use `integration-tests` harness for cross-contract interactions.
-- Add property-style tests for invariants (e.g., total supply never exceeds cap, expired keys inaccessible).
-- Document assumptions in method docs and `docs/` files.
-
-## Review checklist (quick)
-- Is there an explicit `require_auth` where state is mutated?
-- Are storage keys namespaced and compact?
-- Is there a plan for TTL/cleanup if data can grow over time?
-- Are loops bounded or paginated?
-- Are public invariants tested?
-
-## Helpful references
-- Soroban SDK docs and examples (check upstream docs).
-- This repo's `integration-tests` for cross-contract examples.
-
-If you want, I can add examples or expand any section into concrete code snippets tailored to a specific contract in this repo.
