@@ -62,6 +62,15 @@ The `WatcherRegistry` contract stores a set of authorized watcher node addresses
 
 ---
 
+
+---
+
+## Counter Overflow Guard
+
+- **Monotonic ID Space:** The alert ID counter begins at 0 and increments sequentially with each alert registration.
+- **Overflow Protection:** In Rust release builds, integer overflow wraps silently. If alert registrations were ever to reach `u64::MAX` ($2^{64}-1$), silent wrapping would wrap to `0`, causing ID collision and state corruption.
+- **Contract Enforcement:** `storage::next_id()` and contract `next_id()` employ `checked_add(1).ok_or(ContractError::CounterOverflow)?`. When `u64::MAX` is reached, further alert registrations fail explicitly with `ContractError::CounterOverflow = 14`, eliminating silent wrap-around risks.
+
 ## Security Properties Summary
 
 | Property | Enforced by contract |

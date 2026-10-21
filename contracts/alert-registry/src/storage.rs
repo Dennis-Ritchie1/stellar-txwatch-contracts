@@ -9,19 +9,20 @@ use crate::{DEFAULT_TTL};
 ///
 /// Returns the current value before incrementing, so the first ID is `0`.
 /// Stored in persistent storage so it survives instance TTL expiry.
-pub fn next_id(env: &Env) -> u64 {
+pub fn next_id(env: &Env) -> Result<u64, ContractError> {
     let id: u64 = env
         .storage()
         .persistent()
         .get(&DataKey::NextId)
         .unwrap_or(0u64);
+    let next = id.checked_add(1).ok_or(ContractError::CounterOverflow)?;
     env.storage()
         .persistent()
-        .set(&DataKey::NextId, &(id + 1));
+        .set(&DataKey::NextId, &next);
     env.storage()
         .persistent()
         .extend_ttl(&DataKey::NextId, 100, 100);
-    id
+    Ok(id)
 }
 
 // ── Alert CRUD ────────────────────────────────────────────────────────────────

@@ -17,7 +17,8 @@ pub enum ContractError {
     TooManyRules = 7,
     InvalidRuleDescriptor = 8,
     OwnerAlertLimitExceeded = 9,
-    DuplicateAlertId = 10,}
+    DuplicateAlertId = 10,
+    CounterOverflow = 14,}
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 

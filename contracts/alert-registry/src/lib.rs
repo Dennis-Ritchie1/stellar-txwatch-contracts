@@ -68,6 +68,7 @@ pub enum ContractError {
     InvalidRuleDescriptor = 9,
     OwnerAlertLimitExceeded = 10,
     DuplicateAlertId = 11,
+    CounterOverflow = 14,
 }
 
 // ── Data types ───────────────────────────────────────────────────────────────
@@ -257,7 +258,7 @@ impl AlertRegistry {
         Self::validate_rules(&env, &rules)?;
         Self::assert_per_owner_limit(&env, &owner)?;
 
-        let id = Self::next_id(&env);
+        let id = Self::next_id(&env)?;
         let now = env.ledger().timestamp();
 
         let config = AlertConfig {
@@ -287,7 +288,7 @@ impl AlertRegistry {
             (id, owner, target_contract),
         );
 
-        id
+        Ok(id)
     }
 
     /// Update the rules and active flag of an existing alert.
@@ -871,16 +872,17 @@ impl AlertRegistry {
     /// Atomically read and increment the global alert ID counter.
     ///
     /// Returns the current value before incrementing, so the first ID is `0`.
-    fn next_id(env: &Env) -> u64 {
+    fn next_id(env: &Env) -> Result<u64, ContractError> {
         let id: u64 = env
             .storage()
             .instance()
             .get(&symbol_short!("NEXT_ID"))
             .unwrap_or(0u64);
+        let next = id.checked_add(1).ok_or(ContractError::CounterOverflow)?;
         env.storage()
             .instance()
-            .set(&symbol_short!("NEXT_ID"), &(id + 1));
-        id
+            .set(&symbol_short!("NEXT_ID"), &next);
+        Ok(id)
     }
 
     /// Load the list of alert IDs owned by `owner`, or an empty vec.
@@ -2838,5 +2840,25 @@ mod tests {
         assert_eq!(MAX_TTL, 535_680);
         // MAX_TTL must be strictly greater than DEFAULT_TTL
         assert!(MAX_TTL > DEFAULT_TTL);
+    }
+
+    // Counter overflow guard test
+    #[test]
+    fn test_counter_overflow_guard() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+
+        env.storage().instance().set(&symbol_short!("NEXT_ID"), &u64::MAX);
+
+        let res = client.try_register_alert(
+            &owner,
+            &target,
+            &str(&env, "alert"),
+            &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            &vec![&env],
+        );
+
+        assert_eq!(res.unwrap_err().unwrap(), ContractError::CounterOverflow);
     }
 }

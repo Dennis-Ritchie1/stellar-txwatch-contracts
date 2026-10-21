@@ -44,7 +44,7 @@ impl AlertRegistry {
         validate_rules(&env, &rules)?;
         assert_per_owner_limit(&env, &owner)?;
 
-        let id = storage::next_id(&env);
+        let id = storage::next_id(&env)?;
         let now = env.ledger().timestamp();
 
         let config = AlertConfig {
@@ -68,7 +68,7 @@ impl AlertRegistry {
             (id, owner, target_contract),
         );
 
-        id
+        Ok(id)
     }
 
     /// Update the rules and active flag of an existing alert.
