@@ -15,6 +15,10 @@ Install the Stellar CLI:
 cargo install --locked stellar-cli --features opt
 ```
 
+## Formatting
+
+Run `cargo fmt` before pushing. CI enforces formatting with `cargo fmt --all -- --check`, so unformatted code will fail the build. Formatting settings live in `rustfmt.toml`.
+
 ## Build
 
 ```bash
@@ -78,7 +82,7 @@ Example entry:
 1. Add the function inside the `#[contractimpl]` block in `contracts/<name>/src/lib.rs`.
 2. If it mutates state, call `<caller>.require_auth()` as the first line.
 3. Add at least one test in the `#[cfg(test)]` module covering the happy path and any auth rejection.
-4. Run `cargo test` to confirm everything passes.
+4. Run `cargo fmt` and `cargo test` to confirm everything passes.
 5. Update the relevant doc in `docs/`.
 
 ## Adding a New Rule Descriptor

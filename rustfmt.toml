@@ -1,0 +1,17 @@
+# rustfmt configuration for consistent formatting across contributor machines.
+# Run `cargo fmt` before pushing; CI enforces this with `cargo fmt --all -- --check`.
+
+# Maximum width of each line.
+max_width = 100
+
+# Reorder imports alphabetically and group them consistently.
+imports_granularity = "Module"
+
+# Use field init shorthand where possible.
+use_field_init_shorthand = true
+
+# Use try! shorthand where possible.
+use_try_shorthand = true
+
+# Keep a trailing comma in multi-line constructs.
+trailing_comma = "Vertical"

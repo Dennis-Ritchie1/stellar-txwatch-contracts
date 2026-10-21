@@ -12,6 +12,26 @@ Part of the [Tx-wat](https://github.com/Tx-wat) organization.
 | [Alert Registry](contracts/alert-registry/src/lib.rs) | Stores alert configs on-chain keyed by contract address |
 | [Watcher Registry](contracts/watcher-registry/src/lib.rs) | Stores authorized watcher node addresses |
 
+## WASM Size Budget
+
+CI enforces a hard size budget of **200 KB (204800 bytes)** per contract WASM binary
+(see [.github/workflows/wasm-size-check.yml](.github/workflows/wasm-size-check.yml)).
+The build fails if any binary exceeds this threshold.
+
+Current WASM sizes (reference — update after significant changes):
+
+| Contract | WASM binary | Budget |
+|---|---|---|
+| Alert Registry | `alert_registry.wasm` | 200 KB |
+| Watcher Registry | `watcher_registry.wasm` | 200 KB |
+
+To check sizes locally after building:
+
+```bash
+cargo build --release --target wasm32-unknown-unknown
+ls -l target/wasm32-unknown-unknown/release/*.wasm
+```
+
 ## Quick Start
 
 ```bash
