@@ -38,6 +38,10 @@ pub const DEFAULT_TTL: u32 = 120_960;
 /// Approximately 31 days at the nominal 5-second ledger close time.
 pub const MAX_TTL: u32 = 535_680;
 
+/// Maximum number of IDs accepted by [`AlertRegistry::bulk_renew_ttl`] in a
+/// single call, to bound the instruction budget.
+pub const MAX_BATCH_SIZE: u32 = 50;
+
 /// Storage key variants used to address persistent and instance entries.
 #[contracttype]
 pub enum DataKey {
@@ -584,6 +588,63 @@ impl AlertRegistry {
         );
 
         Ok(())
+    }
+
+    /// Extend the TTL of many alerts in a single transaction.
+    ///
+    /// Intended for off-chain keeper services: no auth is required (consistent
+    /// with [`bump_alert`]).  Each live ID has its `Alert`, `AlertActive`,
+    /// `OwnerIndex`, and `ContractIndex` entries extended by [`DEFAULT_TTL`].
+    /// IDs that no longer exist (expired or removed) are silently skipped.
+    ///
+    /// # Arguments
+    /// * `config_ids` - IDs of the alerts to renew.  Must not exceed
+    ///   [`MAX_BATCH_SIZE`].
+    ///
+    /// # Returns
+    /// The number of alerts that were successfully renewed.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::TooManyRules`] if `config_ids` exceeds
+    /// [`MAX_BATCH_SIZE`].
+    ///
+    /// # Events
+    /// Emits `(Symbol("alert"), Symbol("bump"))` with data `(id: u64, ttl: u32)`
+    /// for each renewed alert.
+    pub fn bulk_renew_ttl(env: Env, config_ids: Vec<u64>) -> Result<u32, ContractError> {
+        if config_ids.len() > MAX_BATCH_SIZE {
+            return Err(ContractError::TooManyRules);
+        }
+
+        let mut renewed: u32 = 0;
+        for i in 0..config_ids.len() {
+            let id = config_ids.get(i).unwrap();
+            let config: Option<AlertConfig> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Alert(id));
+            if let Some(config) = config {
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&DataKey::Alert(id), DEFAULT_TTL, DEFAULT_TTL);
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&DataKey::AlertActive(id), DEFAULT_TTL, DEFAULT_TTL);
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&DataKey::OwnerIndex(config.owner.clone()), DEFAULT_TTL, DEFAULT_TTL);
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&DataKey::ContractIndex(config.target_contract), DEFAULT_TTL, DEFAULT_TTL);
+
+                env.events().publish(
+                    (symbol_short!("alert"), symbol_short!("bump")),
+                    (id, DEFAULT_TTL),
+                );
+                renewed += 1;
+            }
+        }
+        Ok(renewed)
     }
 
     /// Retrieve all alert configs that watch a given contract address.

@@ -1,5 +1,7 @@
 use soroban_sdk::{contracttype, contracterror, Address, String, Vec};
 
+/// Maximum number of items accepted by any batched entrypoint, including
+/// `batch_register_alerts` and `bulk_renew_ttl`.
 pub const MAX_BATCH_SIZE: u32 = 20;
 
 /// Maximum number of alert registrations allowed per owner within a single
@@ -124,4 +126,17 @@ pub struct AlertConfig {
     /// This two-step flow prevents a window where the old webhook is deactivated
     /// before the new one is confirmed by the off-chain watcher.
     pub pending_webhook_hash: Option<String>,
+}
+
+/// Event payload emitted once per alert renewed by `bulk_renew_ttl`.
+///
+/// Mirrors the `alert.bump` event emitted by `bump_alert` so off-chain
+/// indexers can consume both single and bulk renewals uniformly.
+#[contracttype]
+#[derive(Clone)]
+pub struct BulkRenewEvent {
+    /// ID of the alert whose TTL was extended.
+    pub config_id: u64,
+    /// Ledger sequence at which the renewal occurred.
+    pub ledger: u32,
 }

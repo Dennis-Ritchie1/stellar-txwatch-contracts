@@ -57,6 +57,22 @@ pub fn extend_alert_ttl(env: &Env, id: u64) {
         .extend_ttl(&DataKey::Alert(id), 100, 100);
 }
 
+/// Extend the TTL of an alert entry and its indexes without modifying data.
+///
+/// Returns `true` if the alert still exists (and was renewed), `false` if it
+/// was already removed or expired.
+pub fn bulk_renew_one(env: &Env, id: u64) -> bool {
+    let Some(cfg) = env.storage().persistent().get::<_, AlertConfig>(&DataKey::Alert(id)) else {
+        return false;
+    };
+    env.storage()
+        .persistent()
+        .extend_ttl(&DataKey::Alert(id), 100, 100);
+    extend_owner_index_ttl(env, &cfg.owner);
+    extend_contract_index_ttl(env, &cfg.target);
+    true
+}
+
 // ── Owner index ───────────────────────────────────────────────────────────────
 
 /// Load the list of alert IDs owned by `owner`, or an empty vec.

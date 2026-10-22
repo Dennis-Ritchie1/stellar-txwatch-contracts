@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Secondary (non-active) AlertRegistry implementation.
 //!
 //! This module contains a clean, modular implementation of the AlertRegistry
@@ -9,7 +10,6 @@
 //! duplicate Soroban client and without conflicting with the `lib.rs`
 //! implementation.  The `tests.rs` file registers the `lib.rs` version.
 
-#![allow(dead_code)]
 
 use soroban_sdk::{symbol_short, Address, Env, String, Vec};
 
@@ -263,6 +263,51 @@ impl AlertRegistry {
         storage::extend_contract_index_ttl(&env, &config.target_contract);
 
         Ok(())
+    }
+
+    /// Extend the TTL of multiple alerts and their index entries without auth.
+    ///
+    /// This is a keeper-callable variant of [`renew_alert_ttl`] that does not
+    /// require owner authorization, allowing off-chain keeper services to renew
+    /// many alerts in a single transaction. IDs that no longer exist (removed or
+    /// expired) are silently skipped.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::BatchTooLarge`] if `config_ids.len()` exceeds
+    /// [`MAX_BATCH_SIZE`].
+    ///
+    /// # Events
+    /// Emits `(Symbol("alert"), Symbol("bump"))` with data `(id: u64)` for each
+    /// successfully renewed alert.
+    ///
+    /// # Returns
+    /// The number of alerts that were successfully renewed.
+    pub fn bulk_renew_ttl(env: Env, config_ids: Vec<u64>) -> u32 {
+        if config_ids.len() > MAX_BATCH_SIZE {
+            return 0;
+        }
+
+        let mut renewed: u32 = 0;
+        for i in 0..config_ids.len() {
+            let id = config_ids.get(i).unwrap();
+            let config = match storage::get_alert(&env, id) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            storage::extend_alert_ttl(&env, id);
+            storage::extend_owner_index_ttl(&env, &config.owner);
+            storage::extend_contract_index_ttl(&env, &config.target_contract);
+
+            env.events().publish(
+                (symbol_short!("alert"), symbol_short!("bump")),
+                id,
+            );
+
+            renewed += 1;
+        }
+
+        renewed
     }
 
     /// Remove an alert config from storage.
