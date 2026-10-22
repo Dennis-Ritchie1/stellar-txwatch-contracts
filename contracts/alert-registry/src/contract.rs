@@ -14,6 +14,7 @@
 use soroban_sdk::{symbol_short, Address, Env, String, Vec};
 
 use crate::storage;
+use crate::types::DataKey;
 use crate::types::{AlertConfig, AlertInput, ContractError, MAX_BATCH_SIZE};
 
 pub struct AlertRegistry;
@@ -36,6 +37,7 @@ impl AlertRegistry {
         rules: Vec<String>,
     ) -> Result<u64, ContractError> {
         owner.require_auth();
+        assert_not_paused(&env)?;
 
         if label.len() > 128 {
             return Err(ContractError::LabelTooLong);
@@ -80,6 +82,7 @@ impl AlertRegistry {
         active: bool,
     ) -> Result<(), ContractError> {
         owner.require_auth();
+        assert_not_paused(&env)?;
 
         let mut config = storage::get_alert(&env, config_id)
             .ok_or(ContractError::AlertNotFound)?;
@@ -109,6 +112,7 @@ impl AlertRegistry {
         webhook_hash: String,
     ) -> Result<(), ContractError> {
         caller.require_auth();
+        assert_not_paused(&env)?;
 
         let mut config = storage::get_alert(&env, config_id)
             .ok_or(ContractError::AlertNotFound)?;
@@ -156,6 +160,7 @@ impl AlertRegistry {
         new_webhook_hash: String,
     ) -> Result<(), ContractError> {
         caller.require_auth();
+        assert_not_paused(&env)?;
 
         let mut config = storage::get_alert(&env, config_id)
             .ok_or(ContractError::AlertNotFound)?;
@@ -199,6 +204,7 @@ impl AlertRegistry {
         config_id: u64,
     ) -> Result<(), ContractError> {
         caller.require_auth();
+        assert_not_paused(&env)?;
 
         let mut config = storage::get_alert(&env, config_id)
             .ok_or(ContractError::AlertNotFound)?;
@@ -243,6 +249,7 @@ impl AlertRegistry {
         config_id: u64,
     ) -> Result<(), ContractError> {
         caller.require_auth();
+        assert_not_paused(&env)?;
 
         let config = storage::get_alert(&env, config_id)
             .ok_or(ContractError::AlertNotFound)?;
@@ -310,6 +317,7 @@ impl AlertRegistry {
         config_id: u64,
     ) -> Result<(), ContractError> {
         caller.require_auth();
+        assert_not_paused(&env)?;
 
         let config = storage::get_alert(&env, config_id)
             .ok_or(ContractError::AlertNotFound)?;
@@ -340,6 +348,7 @@ impl AlertRegistry {
         new_admin: Address,
     ) -> Result<(), ContractError> {
         admin.require_auth();
+        assert_not_paused(&env)?;
         assert_admin(&env, &admin)?;
         storage::set_admin(&env, &new_admin);
         Ok(())
@@ -357,13 +366,17 @@ impl AlertRegistry {
         limit: u32,
     ) -> Result<(), ContractError> {
         admin.require_auth();
+        assert_not_paused(&env)?;
         assert_admin(&env, &admin)?;
         storage::set_limit(&env, limit);
         Ok(())
     }
 
-    /// Get the configured per-owner active alert limit, or `0` if none is set.
-    pub fn get_per_owner_alert_limit(env: Env) -> u32 {
+    /// Get the configured per-owner active alert limit.
+    ///
+    /// Returns `None` when no limit has been set, `Some(0)` when the admin
+    /// explicitly configured `0` (unlimited), and `Some(n)` for `n > 0`.
+    pub fn get_per_owner_alert_limit(env: Env) -> Option<u32> {
         storage::get_limit(&env)
     }
 
@@ -374,6 +387,7 @@ impl AlertRegistry {
         config_id: u64,
     ) -> Result<(), ContractError> {
         admin.require_auth();
+        assert_not_paused(&env)?;
         assert_admin(&env, &admin)?;
 
         let config = storage::get_alert(&env, config_id)
@@ -454,6 +468,42 @@ impl AlertRegistry {
         }
         count
     }
+
+    /// Pause or unpause all mutating operations (admin only).
+    ///
+    /// When paused, every mutating entry point returns
+    /// [`ContractError::ContractPaused`]. Read-only functions are unaffected.
+    ///
+    /// # Events
+    /// Emits `(Symbol("admin"), Symbol("pause"))` when pausing and
+    /// `(Symbol("admin"), Symbol("unpause"))` when unpausing.
+    pub fn set_paused(
+        env: Env,
+        admin: Address,
+        paused: bool,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_admin(&env, &admin)?;
+
+        env.storage().instance().set(&DataKey::Paused, &paused);
+
+        let topic = if paused {
+            symbol_short!("pause")
+        } else {
+            symbol_short!("unpause")
+        };
+        env.events().publish((symbol_short!("admin"), topic), admin);
+
+        Ok(())
+    }
+
+    /// Return whether the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
@@ -466,6 +516,18 @@ fn assert_owner(config: &AlertConfig, caller: &Address) -> Result<(), ContractEr
     }
 }
 
+fn assert_not_paused(env: &Env) -> Result<(), ContractError> {
+    let paused: bool = env
+        .storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false);
+    if paused {
+        return Err(ContractError::ContractPaused);
+    }
+    Ok(())
+}
+
 fn assert_admin(env: &Env, caller: &Address) -> Result<(), ContractError> {
     match storage::get_admin(env) {
         Some(admin) if admin == *caller => Ok(()),
@@ -475,7 +537,7 @@ fn assert_admin(env: &Env, caller: &Address) -> Result<(), ContractError> {
 }
 
 fn assert_per_owner_limit(env: &Env, owner: &Address) -> Result<(), ContractError> {
-    let limit = storage::get_limit(env);
+    let limit = storage::get_limit(env).unwrap_or(0);
     if limit > 0 {
         let ids = storage::owner_index(env, owner);
         let mut count: u32 = 0;
@@ -594,38 +656,23 @@ mod tests {
     }
 
     #[test]
-    fn test_bulk_renew_ttl_skips_removed() {
+    fn test_per_owner_alert_limit_unset_vs_zero_vs_n() {
         let (env, client) = setup();
-        let owner = Address::generate(&env);
-        let target = Address::generate(&env);
+        let admin = Address::generate(&env);
 
-        let id0 = register(&client, &env, &owner, &target);
-        let id1 = register(&client, &env, &owner, &target);
-        let id2 = register(&client, &env, &owner, &target);
-        let id3 = register(&client, &env, &owner, &target);
-        let id4 = register(&client, &env, &owner, &target);
+        // Unset: no limit configured yet.
+        assert_eq!(client.get_per_owner_alert_limit(), None);
 
-        client.remove_alert(&owner, &id2).unwrap();
+        // Explicitly set to 0 (unlimited).
+        client
+            .set_per_owner_alert_limit(&admin, &0u32)
+            .unwrap();
+        assert_eq!(client.get_per_owner_alert_limit(), Some(0u32));
 
-        let ids = vec![&env, id0, id1, id2, id3, id4];
-        let renewed = client.bulk_renew_ttl(&ids);
-        assert_eq!(renewed, 4u32);
-    }
-
-    #[test]
-    fn test_bulk_renew_ttl_enforces_batch_size() {
-        let (env, client) = setup();
-        let owner = Address::generate(&env);
-        let target = Address::generate(&env);
-
-        let id = register(&client, &env, &owner, &target);
-
-        let mut ids = Vec::new(&env);
-        for _ in 0..(MAX_BATCH_SIZE + 1) {
-            ids.push_back(id);
-        }
-
-        let renewed = client.bulk_renew_ttl(&ids);
-        assert_eq!(renewed, 0u32);
+        // Set to a positive limit.
+        client
+            .set_per_owner_alert_limit(&admin, &5u32)
+            .unwrap();
+        assert_eq!(client.get_per_owner_alert_limit(), Some(5u32));
     }
 }

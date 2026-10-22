@@ -39,6 +39,8 @@ pub enum ContractError {
     /// next increment would wrap to 0 and overwrite alert ID 0. `next_id`
     /// uses `checked_add` and returns this error instead of wrapping.
     CounterOverflow = 14,
+    /// Returned when a mutating function is called while the contract is paused.
+    ContractPaused = 15,
 }
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -56,6 +58,8 @@ pub enum DataKey {
     NextId,
     /// Stores the per-owner rate-limit state ([`RateLimitState`]).
     RateLimit(Address),
+    /// Stores the contract-level pause flag (`bool`).
+    Paused,
 }
 
 // ── Data types ────────────────────────────────────────────────────────────────

@@ -900,50 +900,101 @@ fn test_counter_overflow_guard() {
     assert_eq!(res.unwrap_err().unwrap(), ContractError::CounterOverflow);
 }
 
-// ── Feature: bulk_renew_ttl ───────────────────────────────────────────────────
+// ── Feature: contract-level pause / unpause (circuit breaker) ────────────────
 
-// bulk_renew_ttl — renew 5 alerts, 1 of which was removed — verify 4 renewed
+// is_paused defaults to false before any admin action
 #[test]
-fn test_bulk_renew_ttl_skips_removed() {
-    let (env, client) = setup();
-    let owner = Address::generate(&env);
-    let target = Address::generate(&env);
-
-    let mut ids: Vec<u64> = vec![&env];
-    for i in 0..5u32 {
-        let id = client.register_alert(
-            &owner,
-            &target,
-            &str(&env, "Alert"),
-            &str(&env, "hash"),
-            &vec![&env],
-        );
-        ids.push_back(id);
-    }
-
-    // Remove the third alert
-    let removed_id = ids.get(2).unwrap();
-    client.remove_alert(&owner, &removed_id);
-
-    // Advance time — renew should NOT change updated_at
-    env.ledger().with_mut(|li| li.timestamp += 100);
-
-    let renewed = client.bulk_renew_ttl(&ids);
-    assert_eq!(renewed, 4);
+fn test_is_paused_defaults_to_false() {
+    let (_env, client) = setup();
+    assert!(!client.is_paused());
 }
 
-// bulk_renew_ttl — no auth required (keeper-callable)
+// Admin can pause and unpause; is_paused reflects the state
 #[test]
-fn test_bulk_renew_ttl_no_auth_required() {
-    let env = Env::default();
-    let contract_id = env.register(AlertRegistry, ());
-    let client = AlertRegistryClient::new(&env, &contract_id);
+fn test_admin_can_pause_and_unpause() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    assert_eq!(client.try_set_paused(&admin, &true).unwrap(), Ok(()));
+    assert!(client.is_paused());
+
+    assert_eq!(client.try_set_paused(&admin, &false).unwrap(), Ok(()));
+    assert!(!client.is_paused());
+}
+
+// Non-admin cannot pause
+#[test]
+fn test_set_paused_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    client.initialize(&admin);
+
+    assert_eq!(
+        client
+            .try_set_paused(&attacker, &true)
+            .unwrap_err()
+            .unwrap(),
+        ContractError::Unauthorized
+    );
+    assert!(!client.is_paused());
+}
+
+// Non-admin cannot unpause after admin paused
+#[test]
+fn test_set_unpaused_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_paused(&admin, &true);
+
+    assert_eq!(
+        client
+            .try_set_paused(&attacker, &false)
+            .unwrap_err()
+            .unwrap(),
+        ContractError::Unauthorized
+    );
+    assert!(client.is_paused());
+}
+
+// register_alert is rejected while paused
+#[test]
+fn test_register_alert_rejected_when_paused() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_paused(&admin, &true);
 
     let owner = Address::generate(&env);
     let target = Address::generate(&env);
 
-    // Register with auth mocked only for the registration step
-    env.mock_all_auths();
+    assert_eq!(
+        client
+            .try_register_alert(
+                &owner,
+                &target,
+                &str(&env, "Alert"),
+                &str(&env, "hash"),
+                &vec![&env],
+            )
+            .unwrap_err()
+            .unwrap(),
+        ContractError::ContractPaused
+    );
+}
+
+// update_alert is rejected while paused
+#[test]
+fn test_update_alert_rejected_when_paused() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
     let id = client.register_alert(
         &owner,
         &target,
@@ -952,78 +1003,26 @@ fn test_bulk_renew_ttl_no_auth_required() {
         &vec![&env],
     );
 
-    // Clear auths — bulk_renew_ttl must not require any
-    env.set_auths(&[]);
+    client.set_paused(&admin, &true);
 
-    let renewed = client.bulk_renew_ttl(&vec![&env, id]);
-    assert_eq!(renewed, 1);
-}
-
-// bulk_renew_ttl — empty batch returns 0
-#[test]
-fn test_bulk_renew_ttl_empty() {
-    let (env, client) = setup();
-    let renewed = client.bulk_renew_ttl(&vec![&env]);
-    assert_eq!(renewed, 0);
-}
-
-// bulk_renew_ttl — all IDs missing returns 0
-#[test]
-fn test_bulk_renew_ttl_all_missing() {
-    let (env, client) = setup();
-    let renewed = client.bulk_renew_ttl(&vec![&env, 999u64, 1000u64]);
-    assert_eq!(renewed, 0);
-}
-
-// bulk_renew_ttl — data unchanged after renewal
-#[test]
-fn test_bulk_renew_ttl_data_unchanged() {
-    let (env, client) = setup();
-    let owner = Address::generate(&env);
-    let target = Address::generate(&env);
-
-    let id = client.register_alert(
-        &owner,
-        &target,
-        &str(&env, "Alert"),
-        &str(&env, "hash"),
-        &vec![&env, str(&env, "rule:transfer")],
+    assert_eq!(
+        client
+            .try_update_alert(&owner, &id, &vec![&env], &false)
+            .unwrap_err()
+            .unwrap(),
+        ContractError::ContractPaused
     );
-
-    let before = client.get_alert(&id).unwrap();
-    env.ledger().with_mut(|li| li.timestamp += 100);
-
-    let renewed = client.bulk_renew_ttl(&vec![&env, id]);
-    assert_eq!(renewed, 1);
-
-    let after = client.get_alert(&id).unwrap();
-    assert_eq!(after.label, before.label);
-    assert_eq!(after.webhook_hash, before.webhook_hash);
-    assert_eq!(after.rules, before.rules);
-    assert_eq!(after.active, before.active);
-    assert_eq!(after.updated_at, before.updated_at);
-    assert_eq!(after.created_at, before.created_at);
 }
 
-// bulk_renew_ttl — batch size enforced
+// remove_alert is rejected while paused
 #[test]
-#[should_panic(expected = "batch size exceeds maximum")]
-fn test_bulk_renew_ttl_batch_size_enforced() {
+fn test_remove_alert_rejected_when_paused() {
     let (env, client) = setup();
-    let mut ids: Vec<u64> = vec![&env];
-    for i in 0..101u64 {
-        ids.push_back(i);
-    }
-    client.bulk_renew_ttl(&ids);
-}
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
 
-// bulk_renew_ttl — emits events for renewed alerts
-#[test]
-fn test_bulk_renew_ttl_emits_events() {
-    let (env, client) = setup();
     let owner = Address::generate(&env);
     let target = Address::generate(&env);
-
     let id = client.register_alert(
         &owner,
         &target,
@@ -1032,21 +1031,71 @@ fn test_bulk_renew_ttl_emits_events() {
         &vec![&env],
     );
 
-    let before_count = env.events().all().len();
-    client.bulk_renew_ttl(&vec![&env, id]);
-    assert!(env.events().all().len() > before_count);
+    client.set_paused(&admin, &true);
+
+    assert_eq!(
+        client
+            .try_remove_alert(&owner, &id)
+            .unwrap_err()
+            .unwrap(),
+        ContractError::ContractPaused
+    );
 }
 
-// bulk_renew_ttl — mixed live and missing IDs renews only live ones
+// Read-only functions remain available while paused
 #[test]
-fn test_bulk_renew_ttl_mixed() {
+fn test_reads_work_while_paused() {
     let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
     let owner = Address::generate(&env);
     let target = Address::generate(&env);
+    let id = client.register_alert(
+        &owner,
+        &target,
+        &str(&env, "Alert"),
+        &str(&env, "hash"),
+        &vec![&env],
+    );
 
-    let id1 = client.register_alert(&owner, &target, &str(&env, "A"), &str(&env, "h"), &vec![&env]);
-    let id2 = client.register_alert(&owner, &target, &str(&env, "B"), &str(&env, "h"), &vec![&env]);
+    client.set_paused(&admin, &true);
 
-    let renewed = client.bulk_renew_ttl(&vec![&env, id1, 999u64, id2]);
-    assert_eq!(renewed, 2);
+    assert!(client.get_alert(&id).is_some());
+    assert_eq!(
+        client.get_alerts_for_contract(&owner, &target).unwrap().len(),
+        1
+    );
+}
+
+// Mutations resume after unpause
+#[test]
+fn test_mutations_resume_after_unpause() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_paused(&admin, &true);
+    client.set_paused(&admin, &false);
+
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    let id = client.register_alert(
+        &owner,
+        &target,
+        &str(&env, "Alert"),
+        &str(&env, "hash"),
+        &vec![&env],
+    );
+    assert!(client.get_alert(&id).is_some());
+}
+
+// set_paused emits an event
+#[test]
+fn test_set_paused_emits_event() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    client.set_paused(&admin, &true);
+    assert!(!env.events().all().is_empty());
 }

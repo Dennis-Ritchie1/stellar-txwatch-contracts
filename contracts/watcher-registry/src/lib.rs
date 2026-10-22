@@ -4,6 +4,10 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, contracterror, symbol_short, vec, Address, Env, Vec,
 };
 
+/// Number of ledgers to extend instance storage TTL by on each access.
+/// At ~5s per ledger this is roughly 30 days.
+const DEFAULT_TTL: u32 = 518_400;
+
 // ── Errors ────────────────────────────────────────────────────────────────────
 
 #[contracterror]
@@ -59,6 +63,7 @@ impl WatcherRegistry {
 
         let admins: Vec<Address> = vec![&env, admin.clone()];
         env.storage().instance().set(&DataKey::Admins, &admins);
+        Self::extend_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("admin"), symbol_short!("init")),
@@ -91,6 +96,7 @@ impl WatcherRegistry {
         }
         admins.push_back(new_admin.clone());
         env.storage().instance().set(&DataKey::Admins, &admins);
+        Self::extend_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("admin"), symbol_short!("add")),
@@ -129,6 +135,7 @@ impl WatcherRegistry {
             }
         }
         env.storage().instance().set(&DataKey::Admins, &updated);
+        Self::extend_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("admin"), symbol_short!("remove")),
@@ -159,6 +166,7 @@ impl WatcherRegistry {
 
         let new_admins: Vec<Address> = vec![&env, new_admin.clone()];
         env.storage().instance().set(&DataKey::Admins, &new_admins);
+        Self::extend_instance_ttl(&env);
 
         // Emit an auditable on-chain event recording the full admin transfer.
         env.events().publish(
@@ -188,6 +196,7 @@ impl WatcherRegistry {
         }
         watchers.push_back(watcher.clone());
         env.storage().instance().set(&DataKey::Watchers, &watchers);
+        Self::extend_instance_ttl(&env);
 
         Self::increment_watcher_count(&env);
 
@@ -233,6 +242,7 @@ impl WatcherRegistry {
             }
         }
         env.storage().instance().set(&DataKey::Watchers, &updated);
+        Self::extend_instance_ttl(&env);
 
         // Only emit the event and decrement the counter when the watcher was
         // actually present.  Callers that need to detect deauthorization must
@@ -306,6 +316,7 @@ impl WatcherRegistry {
         }
 
         env.storage().instance().set(&DataKey::Watchers, &updated);
+        Self::extend_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("watcher"), symbol_short!("remove")),
@@ -325,6 +336,7 @@ impl WatcherRegistry {
     /// the name now makes explicit *what* the address is being authorized as.
     #[must_use]
     pub fn is_watcher_authorized(env: Env, watcher: Address) -> bool {
+        Self::extend_instance_ttl(&env);
         let watchers = Self::load_watchers(&env);
         for i in 0..watchers.len() {
             if watchers.get(i).unwrap() == watcher {
@@ -364,6 +376,7 @@ impl WatcherRegistry {
 
         let empty: Vec<Address> = vec![&env];
         env.storage().instance().set(&DataKey::Watchers, &empty);
+        Self::extend_instance_ttl(&env);
 
         // Reset the count to zero
         env.storage()
@@ -428,6 +441,15 @@ impl WatcherRegistry {
     }
 
     // ── Internal helpers ─────────────────────────────────────────────────────
+
+    /// Extend the instance storage TTL so a dormant registry is not archived.
+    ///
+    /// Called from every mutating entrypoint and from the hot read path
+    /// (`is_watcher_authorized` / `is_authorized`) to keep the instance alive
+    /// during low-activity periods.
+    fn extend_instance_ttl(env: &Env) {
+        env.storage().instance().extend_ttl(DEFAULT_TTL, DEFAULT_TTL);
+    }
 
     fn increment_watcher_count(env: &Env) {
         let count: u32 = env

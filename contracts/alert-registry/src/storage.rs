@@ -240,15 +240,29 @@ pub fn has_admin(env: &Env) -> bool {
     env.storage().instance().has(&symbol_short!("ADMIN"))
 }
 
-pub fn get_limit(env: &Env) -> u32 {
+pub fn get_limit(env: &Env) -> Option<u32> {
     env.storage()
         .instance()
         .get(&symbol_short!("LIMIT"))
-        .unwrap_or(0u32)
 }
 
 pub fn set_limit(env: &Env, limit: u32) {
     env.storage().instance().set(&symbol_short!("LIMIT"), &limit);
+}
+
+// ── Pause / circuit breaker ───────────────────────────────────────────────────
+
+/// Returns `true` if the contract is currently paused.
+pub fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&symbol_short!("PAUSED"))
+        .unwrap_or(false)
+}
+
+/// Persist the paused flag in instance storage.
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&symbol_short!("PAUSED"), &paused);
 }
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
@@ -260,6 +274,10 @@ pub fn set_limit(env: &Env, limit: u32) {
 /// a `RATE_LIMIT_WINDOW`-ledger window, further registrations are rejected
 /// with [`ContractError::RateLimitExceeded`] until the window rolls over.
 pub fn check_rate_limit(env: &Env, owner: &Address) -> Result<(), ContractError> {
+    if is_paused(env) {
+        return Err(ContractError::ContractPaused);
+    }
+
     let now = env.ledger().sequence();
     let key = DataKey::RateLimit(owner.clone());
     let (window_start, count): (u32, u32) = env
