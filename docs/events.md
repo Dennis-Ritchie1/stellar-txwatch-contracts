@@ -61,11 +61,28 @@ Emitted when an alert's webhook hash is rotated.
 
 Emitted when an alert is removed by its owner or by an admin.
 
+**Owner-initiated removal** (`remove_alert`):
+
 | Field | Value |
 |---|---|
 | Topic 0 | `Symbol("alert")` |
 | Topic 1 | `Symbol("remove")` |
 | Data | `(id: u64, caller: Address)` |
+
+**Admin-initiated removal** (`remove_alert_by_admin`):
+
+| Field | Value |
+|---|---|
+| Topic 0 | `Symbol("alert")` |
+| Topic 1 | `Symbol("remove")` |
+| Data | `(id: u64, admin: Address, owner: Address)` |
+
+> The event data for admin removals includes both the admin who performed the
+> removal **and** the original alert owner.  This allows off-chain indexers
+> and audit/compliance systems to correctly attribute the removal without
+> having to look up the alert record after deletion.  The two shapes are
+> distinguished by tuple arity: owner-initiated events carry 2 fields,
+> admin-initiated events carry 3.  See issue #213 for the design rationale.
 
 **Status:** ✅ implemented (`remove_alert`, `remove_alert_by_admin`)
 
