@@ -28,7 +28,7 @@ fn register_alert_requires_owner_auth() {
         &owner,
         &target,
         &String::from_str(&env, "alert"),
-        &hash64(&env),
+        &String::from_str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         &vec![&env, String::from_str(&env, "rule:transfer")],
     );
     assert!(result.is_err());

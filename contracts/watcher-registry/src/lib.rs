@@ -1,8 +1,12 @@
 #![no_std]
 #![warn(clippy::pedantic)]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, contracterror, symbol_short, vec, Address, Env, Vec,
+    contract, contractimpl, contracttype, contracterror, symbol_short, vec, Address, Env, Symbol, Vec,
 };
+
+/// Number of ledgers to extend instance storage TTL by on each access.
+/// At ~5s per ledger this is roughly 30 days.
+const DEFAULT_TTL: u32 = 518_400;
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 
@@ -48,6 +52,13 @@ pub struct WatcherRegistry;
 impl WatcherRegistry {
     /// Initialize the registry with a single bootstrap admin. Can only be called once.
     ///
+    /// A second call returns [`ContractError::AlreadyInitialized`] rather than
+    /// silently succeeding. This is intentional: a hard error makes a
+    /// re-initialization attempt visible instead of masking it. Deploy scripts
+    /// that run against an existing contract ID should call
+    /// [`WatcherRegistry::is_initialized`] first and skip `initialize` when it
+    /// returns `true`.
+    ///
     /// # Auth
     /// Requires a valid Stellar auth signature from `admin`.
     pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
@@ -59,6 +70,7 @@ impl WatcherRegistry {
 
         let admins: Vec<Address> = vec![&env, admin.clone()];
         env.storage().instance().set(&DataKey::Admins, &admins);
+        Self::extend_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("admin"), symbol_short!("init")),
@@ -91,6 +103,7 @@ impl WatcherRegistry {
         }
         admins.push_back(new_admin.clone());
         env.storage().instance().set(&DataKey::Admins, &admins);
+        Self::extend_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("admin"), symbol_short!("add")),
@@ -104,6 +117,12 @@ impl WatcherRegistry {
     ///
     /// Refuses to remove the last admin to prevent the contract from becoming
     /// permanently unmanageable.
+    ///
+    /// An admin may remove themselves (`caller == target_admin`) as long as at
+    /// least one other admin remains; if they are the sole admin this returns
+    /// [`ContractError::LastAdmin`]. A successful self-removal additionally
+    /// emits `(Symbol("admin"), Symbol("self_remove"))` with data `caller` for
+    /// auditability, since it is usually a mistake.
     ///
     /// # Auth
     /// Requires a valid Stellar auth signature from `caller`, who must be an
@@ -129,11 +148,19 @@ impl WatcherRegistry {
             }
         }
         env.storage().instance().set(&DataKey::Admins, &updated);
+        Self::extend_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("admin"), symbol_short!("remove")),
-            (caller, target_admin),
+            (caller.clone(), target_admin.clone()),
         );
+
+        if caller == target_admin {
+            env.events().publish(
+                (symbol_short!("admin"), Symbol::new(&env, "self_remove")),
+                caller,
+            );
+        }
 
         Ok(())
     }
@@ -159,6 +186,7 @@ impl WatcherRegistry {
 
         let new_admins: Vec<Address> = vec![&env, new_admin.clone()];
         env.storage().instance().set(&DataKey::Admins, &new_admins);
+        Self::extend_instance_ttl(&env);
 
         // Emit an auditable on-chain event recording the full admin transfer.
         env.events().publish(
@@ -188,6 +216,7 @@ impl WatcherRegistry {
         }
         watchers.push_back(watcher.clone());
         env.storage().instance().set(&DataKey::Watchers, &watchers);
+        Self::extend_instance_ttl(&env);
 
         Self::increment_watcher_count(&env);
 
@@ -233,6 +262,7 @@ impl WatcherRegistry {
             }
         }
         env.storage().instance().set(&DataKey::Watchers, &updated);
+        Self::extend_instance_ttl(&env);
 
         // Only emit the event and decrement the counter when the watcher was
         // actually present.  Callers that need to detect deauthorization must
@@ -306,6 +336,7 @@ impl WatcherRegistry {
         }
 
         env.storage().instance().set(&DataKey::Watchers, &updated);
+        Self::extend_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("watcher"), symbol_short!("remove")),
@@ -325,6 +356,7 @@ impl WatcherRegistry {
     /// the name now makes explicit *what* the address is being authorized as.
     #[must_use]
     pub fn is_watcher_authorized(env: Env, watcher: Address) -> bool {
+        Self::extend_instance_ttl(&env);
         let watchers = Self::load_watchers(&env);
         for i in 0..watchers.len() {
             if watchers.get(i).unwrap() == watcher {
@@ -364,6 +396,7 @@ impl WatcherRegistry {
 
         let empty: Vec<Address> = vec![&env];
         env.storage().instance().set(&DataKey::Watchers, &empty);
+        Self::extend_instance_ttl(&env);
 
         // Reset the count to zero
         env.storage()
@@ -393,6 +426,14 @@ impl WatcherRegistry {
     ///
     /// Kept for backwards compatibility. Prefer [`get_admins`] when you need
     /// the full admin set.
+    /// Return `true` if [`WatcherRegistry::initialize`] has already been called.
+    ///
+    /// Read-only entrypoint, requires no authorization.
+    #[must_use]
+    pub fn is_initialized(env: Env) -> bool {
+        env.storage().instance().has(&DataKey::Admins)
+    }
+
     /// Check whether a given address is an admin of the registry.
     ///
     /// Returns `false` (not an error) if the contract has not been initialized.
@@ -428,6 +469,15 @@ impl WatcherRegistry {
     }
 
     // ── Internal helpers ─────────────────────────────────────────────────────
+
+    /// Extend the instance storage TTL so a dormant registry is not archived.
+    ///
+    /// Called from every mutating entrypoint and from the hot read path
+    /// (`is_watcher_authorized` / `is_authorized`) to keep the instance alive
+    /// during low-activity periods.
+    fn extend_instance_ttl(env: &Env) {
+        env.storage().instance().extend_ttl(DEFAULT_TTL, DEFAULT_TTL);
+    }
 
     fn increment_watcher_count(env: &Env) {
         let count: u32 = env
@@ -617,6 +667,28 @@ mod tests {
         let other = Address::generate(&env);
         let err = client.try_initialize(&other).unwrap_err().unwrap();
         assert_eq!(err, ContractError::AlreadyInitialized);
+    }
+
+    // is_initialized reflects first and second initialize
+    #[test]
+    fn test_is_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(WatcherRegistry, ());
+        let client = WatcherRegistryClient::new(&env, &contract_id);
+        assert!(!client.is_initialized());
+
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+        assert!(client.is_initialized());
+
+        let other = Address::generate(&env);
+        assert_eq!(
+            client.try_initialize(&other).unwrap_err().unwrap(),
+            ContractError::AlreadyInitialized
+        );
+        assert!(client.is_initialized());
+        assert_eq!(client.get_admins(), vec![&env, admin]);
     }
 
     // 7. Edge case — get_watchers returns empty before any registration
@@ -863,6 +935,25 @@ mod tests {
                 .unwrap_err()
                 .unwrap(),
             ContractError::LastAdmin
+        );
+    }
+
+    // remove_admin — self-removal succeeds when another admin remains
+    #[test]
+    fn test_admin_self_remove_with_other_admin() {
+        use soroban_sdk::IntoVal;
+        let (env, admin, client) = setup();
+        let second_admin = Address::generate(&env);
+        client.add_admin(&admin, &second_admin);
+
+        assert_eq!(client.try_remove_admin(&admin, &admin).unwrap(), Ok(()));
+        assert!(!client.is_admin(&admin));
+        assert!(client.is_admin(&second_admin));
+
+        let (_, topics, _) = env.events().all().last().unwrap();
+        assert_eq!(
+            topics,
+            (symbol_short!("admin"), Symbol::new(&env, "self_remove")).into_val(&env)
         );
     }
 

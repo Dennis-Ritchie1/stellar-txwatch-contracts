@@ -41,7 +41,7 @@ fn register_emits_alert_register() {
         &owner,
         &target,
         &String::from_str(&env, "alert"),
-        &hash64(&env),
+        &String::from_str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         &vec![&env, String::from_str(&env, "rule:transfer")],
     );
     assert!(emitted(&env, "alert", "register"));
@@ -54,7 +54,7 @@ fn remove_emits_alert_remove() {
         &owner,
         &target,
         &String::from_str(&env, "alert"),
-        &hash64(&env),
+        &String::from_str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         &vec![&env, String::from_str(&env, "rule:transfer")],
     );
     client.remove_alert(&owner, &id);
@@ -68,9 +68,41 @@ fn bump_emits_alert_bump() {
         &owner,
         &target,
         &String::from_str(&env, "alert"),
-        &hash64(&env),
+        &String::from_str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         &vec![&env, String::from_str(&env, "rule:transfer")],
     );
     client.bump_alert(&id, &1_000);
     assert!(emitted(&env, "alert", "bump"));
+}
+
+#[test]
+fn propose_webhook_emits_alert_wh_prop() {
+    let (env, client, owner, target) = setup();
+    let id = client.register_alert(
+        &owner,
+        &target,
+        &String::from_str(&env, "alert"),
+        &String::from_str(&env, "hash"),
+        &vec![&env, String::from_str(&env, "rule:transfer")],
+    );
+    client.propose_webhook(&owner, &id, &String::from_str(&env, "new-hash")).unwrap();
+    assert!(emitted(&env, "alert", "wh_prop"), "propose_webhook must emit (alert, wh_prop)");
+}
+
+// #204 — confirm_webhook must emit ("alert", "webhook"), not ("alert", "wh_conf").
+#[test]
+fn confirm_webhook_emits_alert_webhook() {
+    let (env, client, owner, target) = setup();
+    let id = client.register_alert(
+        &owner,
+        &target,
+        &String::from_str(&env, "alert"),
+        &String::from_str(&env, "hash"),
+        &vec![&env, String::from_str(&env, "rule:transfer")],
+    );
+    client.propose_webhook(&owner, &id, &String::from_str(&env, "new-hash")).unwrap();
+    client.confirm_webhook(&owner, &id).unwrap();
+    assert!(emitted(&env, "alert", "webhook"), "#204: confirm_webhook must emit (alert, webhook)");
+    // Confirm the old non-standard event is NOT emitted.
+    assert!(!emitted(&env, "alert", "wh_conf"), "#204: wh_conf must NOT be emitted by confirm_webhook");
 }

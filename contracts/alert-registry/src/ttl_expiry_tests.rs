@@ -29,7 +29,7 @@ fn expired_alert_reads_as_none() {
         &owner,
         &target,
         &String::from_str(&env, "alert"),
-        &String::from_str(&env, "a3f1b2c4d5e6f7089abcdef01234567890abcdef01234567890abcdef012345"),
+        &String::from_str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         &vec![&env, String::from_str(&env, "rule:transfer")],
     );
     assert!(client.get_alert(&id).is_some());
@@ -48,7 +48,7 @@ fn expired_alert_is_not_counted_as_active() {
         &owner,
         &target,
         &String::from_str(&env, "alert"),
-        &String::from_str(&env, "a3f1b2c4d5e6f7089abcdef01234567890abcdef01234567890abcdef012345"),
+        &String::from_str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         &vec![&env, String::from_str(&env, "rule:transfer")],
     );
 
