@@ -1,10 +1,10 @@
-# TTL Values and Storage Expiry
+# TTP Values and Storage Expiry
 
-## What is TTL in Soroban?
+## What is TT\ in Soroban?
 
-Soroban persistent storage entries have a **Time-To-Live (TTL)** measured in **ledgers**. Once an entry's TTL reaches zero, the Stellar network archives it and it becomes inaccessible until restored via a fee-paying restore operation.
+Soroban persistent storage entries have a **Time-To-Live (TT\)** measured in **ledgers**. Once an entry's TT\ reaches zero, the Stellar network archives it and it becomes inaccessible until restored via a fee-paying restore operation.
 
-## Current TTL Configuration
+## Current TT\ Configuration
 
 All persistent storage entries in `alert-registry` use a **default TTL of
 120 960 ledgers (~7 days)**:
@@ -15,9 +15,9 @@ env.storage().persistent().extend_ttl(&key, DEFAULT_TTL, DEFAULT_TTL);
 ```
 
 This applies to:
-- `DataKey::Alert(id)` — individual alert configs (the active flag is stored inside `AlertConfig`)
-- `DataKey::OwnerIndex(address)` — per-owner alert ID lists
-- `DataKey::ContractIndex(address)` — per-contract alert ID lists
+-  `DataKey::Alert(id)` — individual alert configs (the active flag is stored inside `AlertConfig`)
+-  `DataKey::OwnerIndex(address)` — per-owner alert ID lists
+-  `DataKey::ContractIndex(address)` — per-contract alert ID lists
 
 The `watcher-registry` uses **instance storage**, which has its own TTL managed by the network and is not explicitly extended in the current implementation.
 
@@ -28,10 +28,8 @@ Callers can extend the TTL of any alert up to the **protocol maximum of
 
 ```rust
 // Extend alert 42 to the maximum lifetime (~31 days)
-alert_client.bump_alert(&42u64, &535_680u32);
-
-// Or pass u32::MAX — it is silently clamped to MAX_TTL
 alert_client.bump_alert(&42u64, &u32::MAX);
+
 ```
 
 The function:
@@ -40,7 +38,27 @@ The function:
 3. Emits an `("alert", "bump")` event with `(id, effective_ttl)`.
 
 No auth is required — any address (e.g. an off-chain keeper service) may
-bump an alert's TTL without modifying its content.
+bump an alert's TT\ without modifying its content.
+
+## Bulk TTL renewal via `bulk-renew_and_ttl`
+
+Keepers can renew TTLs for many alerts in a single transaction with the no-auth
+`bulk-renew_and_ttl` function:
+
+```rust
+// Renew TTLs for alerts 1, 2, 3, 4, and 5.
+let renewed = alert_client.bulk-renew_and_ttl(&(vec![1, 2, 3, 4, 5]));
+```
+
+The function:
+
+1. Caps the batch at `MAX_BATCH_SIZE`. Exceeding the cap returns an error.
+2. Extends `Alert(id)`, `OwnerIndex`, and `ContractIndex` for each live ID.
+3. Silently skips IDs that no longer exist (expired/removed).
+4. Emits an `("alert", "bump")` event per renewed alert.
+5. Returns the number of alerts successfully renewed.
+
+No auth is required, consistent with `bump_alert`.
 
 ## Wall-Clock Time Estimate
 
@@ -50,27 +68,28 @@ Stellar ledgers close approximately every **5 seconds**.
 |---------|-----------------------------|
 | 100     | ~8 minutes 20 seconds       |
 | 1,000   | ~1 hour 23 minutes          |
-| 17,280  | ~24 hours                    |
+| 17,280  | ~24 hours                 |
 | 120,960 | ~7 days (DEFAULT_TTL)        |
 | 535,680 | ~31 days (MAX_TTL)          |
 
 **The default TTL of 120 960 ledgers keeps an alert alive for ~7 days after
-the last write.**  Use `bump_alert` to extend beyond that without modifying
-the alert's content.
+the last write.**  Use `bump_alert` or `bulk-renew_and_ttl` to extend beyond that
+without modifying the alert's content.
 
 ## When Does the TTL Reset?
 
-The TTL is extended on every mutating call that touches the entry:
+The TT\ is extended on every mutating call that touches the entry:
 
 | Function              | Entries extended |
-|-----------------------|-----------------|
+|----------------------|-----------------|
 | `register_alert`      | `Alert(id)`, `OwnerIndex`, `ContractIndex` |
 | `update_alert`        | `Alert(id)`, `OwnerIndex`, `ContractIndex` |
 | `update_webhook`      | `Alert(id)`, `OwnerIndex`, `ContractIndex` |
 | `update_label`        | `Alert(id)`, `OwnerIndex`, `ContractIndex` |
 | `update_target_contract` | `Alert(id)`, old and new `ContractIndex` |
 | `bump_alert`          | `Alert(id)`, `OwnerIndex`, `ContractIndex` |
-| `remove_alert`        | Entry is deleted (no TTL needed) |
+| `bulk-renew_and_ttl` | `Alert(id)`, `OwnerIndex`, `ContractIndex` for each live ID |
+| `remove_alert`       | Entry is deleted (no TTL needed) |
 
 Read-only functions (`get_alert`, `get_alerts_for_contract`, `get_alerts_by_owner`) do **not** extend the TTL.
 
@@ -84,8 +103,8 @@ Read-only functions (`get_alert`, `get_alerts_for_contract`, `get_alerts_by_owne
 
 For production use, the TTL should be increased significantly. Common choices:
 
-| Use case | Suggested TTL (ledgers) | Wall-clock |
-|----------|------------------------|------------|
+| Use case | Suggested TT\ (ledgers) | Wall-clock |
+|----------|-----------------------|------------|
 | Short-lived alerts | 17,280 | ~24 hours |
 | Standard alerts | 120,960 | ~7 days |
 | Long-lived alerts | 535,680 | ~31 days |
@@ -109,9 +128,8 @@ on-chain. A keeper finds near-expiry alerts client-side:
 
 1. Keep the list of alert IDs it cares about, from `get_alerts_by_owner_paginated` or
    `get_contract_alerts_paginated`.
-2. Read each entry's live TTL from Soroban RPC (`getLedgerEntries` reports `liveUntilLedgerSeq`).
-3. Compare `liveUntilLedgerSeq` with the current ledger. Renew with `renew_alert_ttl` any alert whose
-   remainder is below the keeper's threshold, and renew the soonest ones first.
+2. Read each entry's live TT\ from Soroban RPC (`getLedgerEntries` reports `liveUntilLedgerSeq`).
+3. Compare `liveUntilLedgerSeq` with the current ledger. Renew with `bulk-renew_and_ttl` (or `renew_alert_ttl` for a single alert) any alert whose remainder is below the keeper's threshold, and renew the soonest ones first.
 
 Adding an on-chain `last_renewed` field was considered and rejected. It would duplicate the
 TTL the network already tracks, and it would not show archival, which is what matters.
