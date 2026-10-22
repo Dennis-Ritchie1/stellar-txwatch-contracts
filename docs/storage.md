@@ -61,7 +61,6 @@ The `NEXT_ID` instance key has no explicit TTL management — its lifetime is ti
 Source: `contracts/watcher-registry/src/lib.rs`
 
 ### Storage Keys
-
 | Key | Tier | Value Type | Description |
 |---|---|---|---|
 | `symbol_short!("ADMIN")` | Instance | `Address` | Current admin address |
@@ -69,7 +68,18 @@ Source: `contracts/watcher-registry/src/lib.rs`
 
 ### TTL Behavior
 
-WatcherRegistry uses **instance storage exclusively**. Instance storage TTL is managed by the Stellar network and is not explicitly extended by any function in this contract. The TTL resets whenever the contract instance is accessed by any transaction that bumps the footprint.
+WatcherRegistry uses **instance storage exclusively**. To prevent archival during low-activity periods, the contract explicitly extends the instance TTL on every mutating function and on the hot read path `is_authorized`.
+
+The extension uses the `Default_TTL` constant defined in `contracts/watcher-registry/src/storage.rs` (currently 518,400 ledgers, ~30 days at 5 s/ledger) and is applied via `env: storage().instance().extend_ttl(DEFAULT_TTL, DEFAULT_TTL)`.
+
+| Function | TTL Extended |
+|---|---|
+| `is_authorized` | Yes |
+| `register_watcher` | Yes |
+| `remove_watcher` | Yes |
+| `add_admin` | Yes |
+| `remove_admin` | Yes |
+| `set_admin` | Yes |
 
 There are no persistent storage entries in WatcherRegistry.
 
@@ -81,7 +91,7 @@ There are no persistent storage entries in WatcherRegistry.
 |---|---|---|---|
 | AlertRegistry | Persistent | `Alert`, `OwnerIndex`, `ContractIndex` | Contract (`extend_ttl`, 100 ledgers) |
 | AlertRegistry | Instance | `NEXT_ID` | Network |
-| WatcherRegistry | Instance | `ADMIN`, `WATCHERS` | Network |
+| WatcherRegistry | Instance | `ADMIN`, `WATCHERS` | Contract (`extend_ttl`, `DEFAULT_TTL` ledgers) |
 
 ## Source of truth for keys
 

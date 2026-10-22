@@ -346,6 +346,81 @@ fn test_update_webhook_unauthorized() {
     );
 }
 
+// 11a. update_webhook rejects a hash shorter than 64 chars
+#[test]
+fn test_update_webhook_short_hash_rejected() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let id = client.register_alert(&owner, &target, &str(&env, "A"), &str(&env, "hash"), &vec![&env]);
+    let short_hash = str(&env, "tooshort");
+    assert_eq!(
+        client
+            .try_update_webhook(&owner, &id, &short_hash)
+            .unwrap_err()
+            .unwrap(),
+        ContractError::InvalidWebhookHash
+    );
+    // Ensure original hash is unchanged
+    assert_eq!(client.get_alert(&id).unwrap().webhook_hash, str(&env, "hash"));
+}
+
+// 11b. update_webhook rejects a hash longer than 64 chars
+#[test]
+fn test_update_webhook_long_hash_rejected() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let id = client.register_alert(&owner, &target, &str(&env, "A"), &str(&env, "hash"), &vec![&env]);
+    // 65 hex chars — one too many
+    let long_hash = str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(
+        client
+            .try_update_webhook(&owner, &id, &long_hash)
+            .unwrap_err()
+            .unwrap(),
+        ContractError::InvalidWebhookHash
+    );
+    // Ensure original hash is unchanged
+    assert_eq!(client.get_alert(&id).unwrap().webhook_hash, str(&env, "hash"));
+}
+
+// 11c. update_webhook accepts exactly 64 chars (valid SHA-256 hex digest)
+#[test]
+fn test_update_webhook_valid_64_char_hash_accepted() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let id = client.register_alert(&owner, &target, &str(&env, "A"), &str(&env, "hash"), &vec![&env]);
+    // Exactly 64 hex chars
+    let valid_hash = str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(
+        client.try_update_webhook(&owner, &id, &valid_hash).unwrap(),
+        Ok(())
+    );
+    assert_eq!(client.get_alert(&id).unwrap().webhook_hash, valid_hash);
+}
+
+// 11d. update_webhook on a nonexistent alert returns AlertNotFound
+#[test]
+fn test_update_webhook_not_found() {
+    let (env, client) = setup();
+    let caller = Address::generate(&env);
+
+    // valid 64-char hash so the length check passes before the existence check
+    let valid_hash = str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(
+        client
+            .try_update_webhook(&caller, &999u64, &valid_hash)
+            .unwrap_err()
+            .unwrap(),
+        ContractError::AlertNotFound
+    );
+}
+
 #[test]
 fn test_update_alert_missing_returns_not_found() {
     let (env, client) = setup();
@@ -903,4 +978,204 @@ fn test_counter_overflow_guard() {
     );
 
     assert_eq!(res.unwrap_err().unwrap(), ContractError::CounterOverflow);
+}
+
+// ── Feature: contract-level pause / unpause (circuit breaker) ────────────────
+
+// is_paused defaults to false before any admin action
+#[test]
+fn test_is_paused_defaults_to_false() {
+    let (_env, client) = setup();
+    assert!(!client.is_paused());
+}
+
+// Admin can pause and unpause; is_paused reflects the state
+#[test]
+fn test_admin_can_pause_and_unpause() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    assert_eq!(client.try_set_paused(&admin, &true).unwrap(), Ok(()));
+    assert!(client.is_paused());
+
+    assert_eq!(client.try_set_paused(&admin, &false).unwrap(), Ok(()));
+    assert!(!client.is_paused());
+}
+
+// Non-admin cannot pause
+#[test]
+fn test_set_paused_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    client.initialize(&admin);
+
+    assert_eq!(
+        client
+            .try_set_paused(&attacker, &true)
+            .unwrap_err()
+            .unwrap(),
+        ContractError::Unauthorized
+    );
+    assert!(!client.is_paused());
+}
+
+// Non-admin cannot unpause after admin paused
+#[test]
+fn test_set_unpaused_unauthorized() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_paused(&admin, &true);
+
+    assert_eq!(
+        client
+            .try_set_paused(&attacker, &false)
+            .unwrap_err()
+            .unwrap(),
+        ContractError::Unauthorized
+    );
+    assert!(client.is_paused());
+}
+
+// register_alert is rejected while paused
+#[test]
+fn test_register_alert_rejected_when_paused() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_paused(&admin, &true);
+
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    assert_eq!(
+        client
+            .try_register_alert(
+                &owner,
+                &target,
+                &str(&env, "Alert"),
+                &str(&env, "hash"),
+                &vec![&env],
+            )
+            .unwrap_err()
+            .unwrap(),
+        ContractError::ContractPaused
+    );
+}
+
+// update_alert is rejected while paused
+#[test]
+fn test_update_alert_rejected_when_paused() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    let id = client.register_alert(
+        &owner,
+        &target,
+        &str(&env, "Alert"),
+        &str(&env, "hash"),
+        &vec![&env],
+    );
+
+    client.set_paused(&admin, &true);
+
+    assert_eq!(
+        client
+            .try_update_alert(&owner, &id, &vec![&env], &false)
+            .unwrap_err()
+            .unwrap(),
+        ContractError::ContractPaused
+    );
+}
+
+// remove_alert is rejected while paused
+#[test]
+fn test_remove_alert_rejected_when_paused() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    let id = client.register_alert(
+        &owner,
+        &target,
+        &str(&env, "Alert"),
+        &str(&env, "hash"),
+        &vec![&env],
+    );
+
+    client.set_paused(&admin, &true);
+
+    assert_eq!(
+        client
+            .try_remove_alert(&owner, &id)
+            .unwrap_err()
+            .unwrap(),
+        ContractError::ContractPaused
+    );
+}
+
+// Read-only functions remain available while paused
+#[test]
+fn test_reads_work_while_paused() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    let id = client.register_alert(
+        &owner,
+        &target,
+        &str(&env, "Alert"),
+        &str(&env, "hash"),
+        &vec![&env],
+    );
+
+    client.set_paused(&admin, &true);
+
+    assert!(client.get_alert(&id).is_some());
+    assert_eq!(
+        client.get_alerts_for_contract(&owner, &target).unwrap().len(),
+        1
+    );
+}
+
+// Mutations resume after unpause
+#[test]
+fn test_mutations_resume_after_unpause() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_paused(&admin, &true);
+    client.set_paused(&admin, &false);
+
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    let id = client.register_alert(
+        &owner,
+        &target,
+        &str(&env, "Alert"),
+        &str(&env, "hash"),
+        &vec![&env],
+    );
+    assert!(client.get_alert(&id).is_some());
+}
+
+// set_paused emits an event
+#[test]
+fn test_set_paused_emits_event() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+
+    client.set_paused(&admin, &true);
+    assert!(!env.events().all().is_empty());
 }

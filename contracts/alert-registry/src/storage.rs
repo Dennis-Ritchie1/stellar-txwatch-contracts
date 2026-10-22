@@ -1,4 +1,4 @@
-use soroban_sdk::{symbol_short, vec, Address, Env, Vec};
+﻿use soroban_sdk::{symbol_short, vec, Address, Env, Vec};
 
 use crate::types::{AlertConfig, ContractError, DataKey};
 use crate::{DEFAULT_TTL, RATE_LIMIT_COUNT, RATE_LIMIT_WINDOW};
@@ -23,10 +23,35 @@ pub fn next_id(env: &Env) -> Result<u64, ContractError> {
         .unwrap_or(0u64);
     let next = id.checked_add(1).ok_or(ContractError::CounterOverflow)?;
     env.storage().persistent().set(&DataKey::NextId, &next);
+    // Use DEFAULT_TTL so the counter survives as long as the alert data it
+    // belongs to.  The previous hard-coded 100-ledger bump was far too short —
+    // a contract that only receives TTL renewals (no new registrations) would
+    // let NextId expire and then restart from 0 on the next registration,
+    // producing ID collisions.  See issue #212.
     env.storage()
         .persistent()
-        .extend_ttl(&DataKey::NextId, 100, 100);
+        .extend_ttl(&DataKey::NextId, DEFAULT_TTL, DEFAULT_TTL);
     Ok(id)
+}
+
+/// Extend the TTL of the global alert ID counter to [`DEFAULT_TTL`].
+///
+/// Callers that keep alert data alive (e.g. [`crate::contract::renew_alert_ttl`]
+/// and [`crate::lib::bump_alert`]) **must** also call this function so that the
+/// `NextId` counter cannot expire independently of the alert entries it tracks.
+///
+/// If `NextId` expires while alert data is still live the next call to
+/// `register_alert` would restart the counter from `0`, silently reusing IDs
+/// that are already in use and causing ID collisions (see issue #212).
+///
+/// This is a no-op when `NextId` is not yet in storage (counter never
+/// initialised), so it is safe to call unconditionally.
+pub fn extend_next_id_ttl(env: &Env) {
+    if env.storage().persistent().has(&DataKey::NextId) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::NextId, DEFAULT_TTL, DEFAULT_TTL);
+    }
 }
 
 // ── Alert CRUD ────────────────────────────────────────────────────────────────
@@ -55,6 +80,22 @@ pub fn extend_alert_ttl(env: &Env, id: u64) {
     env.storage()
         .persistent()
         .extend_ttl(&DataKey::Alert(id), 100, 100);
+}
+
+/// Extend the TTL of an alert entry and its indexes without modifying data.
+///
+/// Returns `true` if the alert still exists (and was renewed), `false` if it
+/// was already removed or expired.
+pub fn bulk_renew_one(env: &Env, id: u64) -> bool {
+    let Some(cfg) = env.storage().persistent().get::<_, AlertConfig>(&DataKey::Alert(id)) else {
+        return false;
+    };
+    env.storage()
+        .persistent()
+        .extend_ttl(&DataKey::Alert(id), 100, 100);
+    extend_owner_index_ttl(env, &cfg.owner);
+    extend_contract_index_ttl(env, &cfg.target);
+    true
 }
 
 // ── Owner index ───────────────────────────────────────────────────────────────
@@ -224,15 +265,29 @@ pub fn has_admin(env: &Env) -> bool {
     env.storage().instance().has(&symbol_short!("ADMIN"))
 }
 
-pub fn get_limit(env: &Env) -> u32 {
+pub fn get_limit(env: &Env) -> Option<u32> {
     env.storage()
         .instance()
         .get(&symbol_short!("LIMIT"))
-        .unwrap_or(0u32)
 }
 
 pub fn set_limit(env: &Env, limit: u32) {
     env.storage().instance().set(&symbol_short!("LIMIT"), &limit);
+}
+
+// ── Pause / circuit breaker ───────────────────────────────────────────────────
+
+/// Returns `true` if the contract is currently paused.
+pub fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&symbol_short!("PAUSED"))
+        .unwrap_or(false)
+}
+
+/// Persist the paused flag in instance storage.
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&symbol_short!("PAUSED"), &paused);
 }
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
@@ -244,6 +299,10 @@ pub fn set_limit(env: &Env, limit: u32) {
 /// a `RATE_LIMIT_WINDOW`-ledger window, further registrations are rejected
 /// with [`ContractError::RateLimitExceeded`] until the window rolls over.
 pub fn check_rate_limit(env: &Env, owner: &Address) -> Result<(), ContractError> {
+    if is_paused(env) {
+        return Err(ContractError::ContractPaused);
+    }
+
     let now = env.ledger().sequence();
     let key = DataKey::RateLimit(owner.clone());
     let (window_start, count): (u32, u32) = env
@@ -270,3 +329,4 @@ pub fn check_rate_limit(env: &Env, owner: &Address) -> Result<(), ContractError>
         .extend_ttl(&key, DEFAULT_TTL, DEFAULT_TTL);
     Ok(())
 }
+
