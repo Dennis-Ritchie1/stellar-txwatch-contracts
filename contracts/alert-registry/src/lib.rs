@@ -38,6 +38,10 @@ pub const DEFAULT_TTL: u32 = 120_960;
 /// Approximately 31 days at the nominal 5-second ledger close time.
 pub const MAX_TTL: u32 = 535_680;
 
+/// Maximum number of IDs accepted by [`AlertRegistry::bulk_renew_ttl`] in a
+/// single call, to bound the instruction budget.
+pub const MAX_BATCH_SIZE: u32 = 50;
+
 /// Storage key variants used to address persistent and instance entries.
 #[contracttype]
 pub enum DataKey {
@@ -74,8 +78,8 @@ pub enum ContractError {
     /// A storage write failed, for example because an entry exceeds the protocol size limit.
     /// Returned as a typed error so callers can tell storage saturation from a bug (#251).
     StorageError = 13,
-    /// Returned when the alert ID counter would overflow `u64`.
-    CounterOverflow = 14,
+    /// Returned when a mutating function is called while the contract is paused.
+    ContractPaused = 14,
 }
 
 // ── Data types ───────────────────────────────────────────────────────────────
@@ -202,6 +206,31 @@ impl AlertRegistry {
         Ok(())
     }
 
+    /// Pause or unpause all mutating operations (admin only).
+    ///
+    /// While paused, every mutating entry point returns
+    /// [`ContractError::ContractPaused`]. Read-only functions are unaffected.
+    pub fn set_paused(env: Env, admin: Address, paused: bool) -> Result<(), ContractError> {
+        admin.require_auth();
+        Self::assert_admin(&env, &admin)?;
+        env.storage().instance().set(&symbol_short!("PAUSED"), &paused);
+        let topic = if paused {
+            symbol_short!("pause")
+        } else {
+            symbol_short!("unpause")
+        };
+        env.events().publish((symbol_short!("admin"), topic), admin);
+        Ok(())
+    }
+
+    /// Return whether the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&symbol_short!("PAUSED"))
+            .unwrap_or(false)
+    }
+
     /// Get the configured per-owner active alert limit, or `0` if none is set.
     pub fn get_per_owner_alert_limit(env: Env) -> u32 {
         env.storage()
@@ -264,6 +293,7 @@ impl AlertRegistry {
         webhook_hash: String,
         rules: Vec<String>,
     ) -> Result<u64, ContractError> {
+        Self::assert_not_paused(&env)?;
         if webhook_hash.len() != 64 {
             return Err(ContractError::InvalidWebhookHash);
         }
@@ -322,6 +352,7 @@ impl AlertRegistry {
         rules: Vec<String>,
         active: bool,
     ) -> Result<(), ContractError> {
+        Self::assert_not_paused(&env)?;
         caller.require_auth();
 
         let mut config: AlertConfig = env
@@ -376,6 +407,7 @@ impl AlertRegistry {
         config_id: u64,
         webhook_hash: String,
     ) -> Result<(), ContractError> {
+        Self::assert_not_paused(&env)?;
         caller.require_auth();
 
         let mut config: AlertConfig = env
@@ -543,6 +575,7 @@ impl AlertRegistry {
         config_id: u64,
         label: String,
     ) -> Result<(), ContractError> {
+        Self::assert_not_paused(&env)?;
         caller.require_auth();
 
         if label.len() > 128 {
@@ -581,6 +614,7 @@ impl AlertRegistry {
         caller: Address,
         config_id: u64,
     ) -> Result<(), ContractError> {
+        Self::assert_not_paused(&env)?;
         caller.require_auth();
 
         let config: AlertConfig = env
@@ -603,6 +637,7 @@ impl AlertRegistry {
         admin: Address,
         config_id: u64,
     ) -> Result<(), ContractError> {
+        Self::assert_not_paused(&env)?;
         admin.require_auth();
         Self::assert_admin(&env, &admin)?;
 
@@ -642,6 +677,7 @@ impl AlertRegistry {
         config_id: u64,
         ttl: u32,
     ) -> Result<(), ContractError> {
+        Self::assert_not_paused(&env)?;
         // Extends all four related entries, so the owner index cannot expire while the alert
         // is still live and make it disappear from `get_alerts_by_owner` (#254).
         // Clamp the requested TTL to the protocol maximum.
@@ -672,6 +708,63 @@ impl AlertRegistry {
         );
 
         Ok(())
+    }
+
+    /// Extend the TTL of many alerts in a single transaction.
+    ///
+    /// Intended for off-chain keeper services: no auth is required (consistent
+    /// with [`bump_alert`]).  Each live ID has its `Alert`, `AlertActive`,
+    /// `OwnerIndex`, and `ContractIndex` entries extended by [`DEFAULT_TTL`].
+    /// IDs that no longer exist (expired or removed) are silently skipped.
+    ///
+    /// # Arguments
+    /// * `config_ids` - IDs of the alerts to renew.  Must not exceed
+    ///   [`MAX_BATCH_SIZE`].
+    ///
+    /// # Returns
+    /// The number of alerts that were successfully renewed.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::TooManyRules`] if `config_ids` exceeds
+    /// [`MAX_BATCH_SIZE`].
+    ///
+    /// # Events
+    /// Emits `(Symbol("alert"), Symbol("bump"))` with data `(id: u64, ttl: u32)`
+    /// for each renewed alert.
+    pub fn bulk_renew_ttl(env: Env, config_ids: Vec<u64>) -> Result<u32, ContractError> {
+        if config_ids.len() > MAX_BATCH_SIZE {
+            return Err(ContractError::TooManyRules);
+        }
+
+        let mut renewed: u32 = 0;
+        for i in 0..config_ids.len() {
+            let id = config_ids.get(i).unwrap();
+            let config: Option<AlertConfig> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Alert(id));
+            if let Some(config) = config {
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&DataKey::Alert(id), DEFAULT_TTL, DEFAULT_TTL);
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&DataKey::AlertActive(id), DEFAULT_TTL, DEFAULT_TTL);
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&DataKey::OwnerIndex(config.owner.clone()), DEFAULT_TTL, DEFAULT_TTL);
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&DataKey::ContractIndex(config.target_contract), DEFAULT_TTL, DEFAULT_TTL);
+
+                env.events().publish(
+                    (symbol_short!("alert"), symbol_short!("bump")),
+                    (id, DEFAULT_TTL),
+                );
+                renewed += 1;
+            }
+        }
+        Ok(renewed)
     }
 
     /// Retrieve all alert configs that watch a given contract address.
@@ -781,6 +874,7 @@ impl AlertRegistry {
     /// # Returns
     /// The number of alerts that were deactivated.
     pub fn deactivate_all_alerts(env: Env, caller: Address) -> u32 {
+        Self::assert_not_paused(&env).unwrap_or_else(|e| panic_with_error!(&env, e));
         caller.require_auth();
         let ids = Self::owner_index(&env, &caller);
         let mut count: u32 = 0;
@@ -829,6 +923,7 @@ impl AlertRegistry {
         config_id: u64,
         new_target: Address,
     ) -> Result<(), ContractError> {
+        Self::assert_not_paused(&env)?;
         caller.require_auth();
 
         let mut config: AlertConfig = env
@@ -932,6 +1027,14 @@ impl AlertRegistry {
     }
 
     // ── Internal helpers ─────────────────────────────────────────────────────
+
+    /// Reject mutating calls while the contract is paused.
+    fn assert_not_paused(env: &Env) -> Result<(), ContractError> {
+        if Self::is_paused(env.clone()) {
+            return Err(ContractError::ContractPaused);
+        }
+        Ok(())
+    }
 
     /// If a `WatcherRegistry` contract address is stored in instance storage,
     /// perform a cross-contract call to verify that `querier` is a registered
