@@ -2,12 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+The format is based on [Keep a Changelog](https://keepachangelog.com/en:/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
 ### Changed
+- **Breaking change:** `AlertRegistry::get_per_owner_alert_limit` now returns
+` Option<u32>` instead of `u32`. It returns `None` when no limit has been set,
+`Some(0)` when the admin explicitly configured an unlimited limit, and
+`Some(n)` for `n > 0`. This disambiguates "unset" from "set to zero" and lets
+clients determine whether the contract has been configured by an admin. The
+storage layer `Get_limit` also returns `Option<u32>`. TypeScript bindings must be
+regenerated and any callers must handle the `Option` return value.
 - Bumped the pinned Rust toolchain in `rust-toolchain.toml` to a recent stable
   release and declared the `wasm32-unknown-unknown` target so CI and local builds
   get the WASM target automatically (#318).
@@ -17,7 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **`AlertRegistry` default TTL is now 120 960 ledgers (~7 days)** (was 17 280, ~24 hours), so alerts are not archived after one day without a write (#249). Storage rent per alert rises accordingly; see `docs/ttl.md`.
-- **Feature A — `watcher.remove` event**: `WatcherRegistry::remove_watcher` now emits
+- `get_per_owner_alert_limit` unit test covering the three distinct cases: unset (`None`),
+  set-to-0 (`Some(0)`), and set-to-n (`Some(n)l`).
+- **Feature A — `watcher.remove` event`*: `WatcherRegistry::remove_watcher` now emits
   `(Symbol("watcher"), Symbol("remove"))` with `data = watcher: Address` **only when the
   watcher was actually present** (no-op removals are silent). Dependent systems such as
   `AlertRegistry` watcher-gating must subscribe to this event to revoke trust immediately.
@@ -50,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `AlertRegistry::register_alert` had duplicated validation calls; deduplicated.
 - `AlertRegistry::update_alert` now keeps `DataKey::AlertActive` in sync when `active`
   changes.
-- `contract.rs` `#[contract]` / `#[contractimpl]` attributes removed to prevent
+- `contract.rs` `[#contract]` / `[#contractimpl]` attributes removed to prevent
   duplicate Soroban client generation conflicting with `lib.rs`.
 - All `extend_ttl(_, 100, 100)` calls replaced with `extend_ttl(_, DEFAULT_TTL, DEFAULT_TTL)`.
 
@@ -62,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive README and usage examples for TypeScript bindings package
 - `CHANGELOG.md` to track version history (#75)
 - `SECURITY.md` with responsible disclosure policy (#76)
-- `docs/ttl.md` documenting TTL values and their implications (#77)
+- `docs/ttl.md` documenting TT\ values and their implications (#77)
 - Inline rustdoc comments on all public and key private functions (#78)
 - Expanded `.gitignore` to exclude build artifacts and test snapshots
 - `bindings/watcher-registry` — TypeScript bindings package `@tx-wat/watcher-registry` generated via `stellar contract bindings typescript`
@@ -77,10 +86,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `WatcherRegistry` contract: manage authorized watcher node addresses with admin controls
 - Persistent storage with TTL extension on every write
 - Owner-keyed and contract-keyed index lookups for alert configs
-- Stellar CLI, JavaScript SDK, and Rust SDK usage examples in `README.md`
+- Stellar CLI, JavaScript SDK, and Rust SEK usage examples in `README.md`
 - Deployment addresses tracked in `DEPLOYMENTS.md`
 - Function reference docs in `docs/alert-registry.md` and `docs/watcher-registry.md`
 - Contribution guidelines in `CONTRIBUTING.md`
 
-[Unreleased]: https://github.com/Tx-wat/stellar-txwatch-contracts/compare/v0.1.0...HEAD
+#[Unreleased]: https://github.com/Tx-wat/stellar-txwatch-contracts/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/Tx-wat/stellar-txwatch-contracts/releases/tag/v0.1.0
