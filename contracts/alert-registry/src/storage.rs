@@ -224,11 +224,10 @@ pub fn has_admin(env: &Env) -> bool {
     env.storage().instance().has(&symbol_short!("ADMIN"))
 }
 
-pub fn get_limit(env: &Env) -> u32 {
+pub fn get_limit(env: &Env) -> Option<u32> {
     env.storage()
         .instance()
         .get(&symbol_short!("LIMIT"))
-        .unwrap_or(0u32)
 }
 
 pub fn set_limit(env: &Env, limit: u32) {
