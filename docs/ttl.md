@@ -7,16 +7,15 @@ Soroban persistent storage entries have a **Time-To-Live (TTL)** measured in **l
 ## Current TTL Configuration
 
 All persistent storage entries in `alert-registry` use a **default TTL of
-17 280 ledgers (~24 hours)**:
+120 960 ledgers (~7 days)**:
 
 ```rust
-// DEFAULT_TTL = 17_280  (~24 hours at 5 s/ledger)
+// DEFAULT_TTL = 120_960  (~7 days at 5 s/ledger)
 env.storage().persistent().extend_ttl(&key, DEFAULT_TTL, DEFAULT_TTL);
 ```
 
 This applies to:
-- `DataKey::Alert(id)` — individual alert configs
-- `DataKey::AlertActive(id)` — per-alert active flag
+- `DataKey::Alert(id)` — individual alert configs (the active flag is stored inside `AlertConfig`)
 - `DataKey::OwnerIndex(address)` — per-owner alert ID lists
 - `DataKey::ContractIndex(address)` — per-contract alert ID lists
 
@@ -37,7 +36,7 @@ alert_client.bump_alert(&42u64, &u32::MAX);
 
 The function:
 1. Clamps the requested TTL to `MAX_TTL` (535 680 ledgers).
-2. Extends `Alert`, `AlertActive`, `OwnerIndex`, and `ContractIndex` entries.
+2. Extends `Alert`, `OwnerIndex`, and `ContractIndex` entries.
 3. Emits an `("alert", "bump")` event with `(id, effective_ttl)`.
 
 No auth is required — any address (e.g. an off-chain keeper service) may
@@ -51,11 +50,11 @@ Stellar ledgers close approximately every **5 seconds**.
 |---------|-----------------------------|
 | 100     | ~8 minutes 20 seconds       |
 | 1,000   | ~1 hour 23 minutes          |
-| 17,280  | ~24 hours (DEFAULT_TTL)     |
-| 120,960 | ~7 days                     |
+| 17,280  | ~24 hours                    |
+| 120,960 | ~7 days (DEFAULT_TTL)        |
 | 535,680 | ~31 days (MAX_TTL)          |
 
-**The default TTL of 17 280 ledgers keeps an alert alive for ~24 hours after
+**The default TTL of 120 960 ledgers keeps an alert alive for ~7 days after
 the last write.**  Use `bump_alert` to extend beyond that without modifying
 the alert's content.
 
@@ -65,12 +64,12 @@ The TTL is extended on every mutating call that touches the entry:
 
 | Function              | Entries extended |
 |-----------------------|-----------------|
-| `register_alert`      | `Alert(id)`, `AlertActive(id)`, `OwnerIndex`, `ContractIndex` |
+| `register_alert`      | `Alert(id)`, `OwnerIndex`, `ContractIndex` |
 | `update_alert`        | `Alert(id)`, `OwnerIndex`, `ContractIndex` |
 | `update_webhook`      | `Alert(id)`, `OwnerIndex`, `ContractIndex` |
 | `update_label`        | `Alert(id)`, `OwnerIndex`, `ContractIndex` |
 | `update_target_contract` | `Alert(id)`, old and new `ContractIndex` |
-| `bump_alert`          | `Alert(id)`, `AlertActive(id)`, `OwnerIndex`, `ContractIndex` |
+| `bump_alert`          | `Alert(id)`, `OwnerIndex`, `ContractIndex` |
 | `remove_alert`        | Entry is deleted (no TTL needed) |
 
 Read-only functions (`get_alert`, `get_alerts_for_contract`, `get_alerts_by_owner`) do **not** extend the TTL.
@@ -102,3 +101,17 @@ env.storage().persistent().extend_ttl(&DataKey::Alert(id), 120_960, 120_960);
 
 - [Soroban State Archival](https://developers.stellar.org/docs/learn/encyclopedia/storage/state-archival)
 - [Soroban Storage TTL Reference](https://developers.stellar.org/docs/build/smart-contracts/getting-started/storing-data)
+
+## Finding alerts close to expiry (keepers)
+
+The contract cannot read an entry's remaining TTL, so `get_alerts_expiring_soon` is not added
+on-chain. A keeper finds near-expiry alerts client-side:
+
+1. Keep the list of alert IDs it cares about, from `get_alerts_by_owner_paginated` or
+   `get_contract_alerts_paginated`.
+2. Read each entry's live TTL from Soroban RPC (`getLedgerEntries` reports `liveUntilLedgerSeq`).
+3. Compare `liveUntilLedgerSeq` with the current ledger. Renew with `renew_alert_ttl` any alert whose
+   remainder is below the keeper's threshold, and renew the soonest ones first.
+
+Adding an on-chain `last_renewed` field was considered and rejected. It would duplicate the
+TTL the network already tracks, and it would not show archival, which is what matters.

@@ -1,0 +1,95 @@
+name: Deploy Mainnet
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type 'yes-deploy-mainnet' to confirm a mainnet deployment"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  deploy-mainnet:
+    name: Deploy to Mainnet
+    runs-on: ubuntu-latest
+    environment: mainnet
+    if: ${{ github.event.inputs.confirmation == 'yes-deploy-mainnet' }}
+    steps:
+      - name: Verify confirmation input
+        run: |
+          if [ "${{ github.event.inputs.confirmation }}" != "yes-deploy-mainnet" ]; then
+            echo "::error::Confirmation input must be exactly 'yes-deploy-mainnet'"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Build optimized WASM
+        run: |
+          cargo build --release --target wasm32-unknown-unknown
+          cargo install --locked stellar-cli --features opt || true
+          for wasm in target/wasm32-unknown-unknown/release/*.wasm; do
+            stellar contract optimize --wasm "$wasm"
+          done
+
+      - name: Run integration tests against testnet (pre-check)
+        env:
+          STELLAR_NETWORK: testnet
+        run: cargo test --release
+
+      - name: Upload WASM to mainnet
+        env:
+          STELLAR_NETWORK: mainnet
+          MAINNET_ADMIN_KEY: ${{ secrets.MAINNET_ADMIN_KEY }}
+        run: |
+          echo "$MAINNET_ADMIN_KEY" > /tmp/mainnet_admin.key
+          chmod 600 /tmp/mainnet_admin.key
+          : > /tmp/mainnet_contract_ids.txt
+          for wasm in target/wasm32-unknown-unknown/release/*.optimized.wasm; do
+            contract_id=$(stellar contract upload \
+              --wasm "$wasm" \
+              --source-account /tmp/mainnet_admin.key \
+              --network mainnet)
+            echo "$(basename "$wasm" .optimized.wasm)=$contract_id" >> /tmp/mainnet_contract_ids.txt
+          done
+          rm -f /tmp/mainnet_admin.key
+          cat /tmp/mainnet_contract_ids.txt
+
+      - name: Update DEPLOYMENTS.md with new contract IDs
+        run: |
+          {
+            echo ""
+            echo "## Mainnet deployment $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+            echo "| Contract | Contract ID |"
+            echo "| --- | --- |"
+            while IFS='=' read -r name contract_id; do
+              echo "| $name | $contract_id |"
+            done < /tmp/mainnet_contract_ids.txt
+          } >> DEPLOYMENTS.md
+
+      - name: Commit DEPLOYMENTS.md
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add DEPLOYMENTS.md
+          git commit -m "chore: record mainnet deployment $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push
+
+      - name: Create GitHub release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="mainnet-$(date -u +%Y%m%d%H%M%S)"
+          gh release create "$tag" \
+            --title "Mainnet deployment $tag" \
+            --notes-file /tmp/mainnet_contract_ids.txt

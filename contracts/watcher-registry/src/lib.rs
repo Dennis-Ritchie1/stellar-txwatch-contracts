@@ -4,6 +4,10 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, contracterror, symbol_short, vec, Address, Env, Vec,
 };
 
+/// Number of ledgers to extend instance storage TTL by on each access.
+/// At ~5s per ledger this is roughly 30 days.
+const DEFAULT_TTL: u32 = 518_400;
+
 // ── Errors ────────────────────────────────────────────────────────────────────
 
 #[contracterror]
@@ -59,6 +63,7 @@ impl WatcherRegistry {
 
         let admins: Vec<Address> = vec![&env, admin.clone()];
         env.storage().instance().set(&DataKey::Admins, &admins);
+        Self::extend_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("admin"), symbol_short!("init")),
@@ -91,6 +96,7 @@ impl WatcherRegistry {
         }
         admins.push_back(new_admin.clone());
         env.storage().instance().set(&DataKey::Admins, &admins);
+        Self::extend_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("admin"), symbol_short!("add")),
@@ -129,6 +135,7 @@ impl WatcherRegistry {
             }
         }
         env.storage().instance().set(&DataKey::Admins, &updated);
+        Self::extend_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("admin"), symbol_short!("remove")),
@@ -159,6 +166,7 @@ impl WatcherRegistry {
 
         let new_admins: Vec<Address> = vec![&env, new_admin.clone()];
         env.storage().instance().set(&DataKey::Admins, &new_admins);
+        Self::extend_instance_ttl(&env);
 
         // Emit an auditable on-chain event recording the full admin transfer.
         env.events().publish(
@@ -188,6 +196,7 @@ impl WatcherRegistry {
         }
         watchers.push_back(watcher.clone());
         env.storage().instance().set(&DataKey::Watchers, &watchers);
+        Self::extend_instance_ttl(&env);
 
         Self::increment_watcher_count(&env);
 
@@ -233,6 +242,7 @@ impl WatcherRegistry {
             }
         }
         env.storage().instance().set(&DataKey::Watchers, &updated);
+        Self::extend_instance_ttl(&env);
 
         // Only emit the event and decrement the counter when the watcher was
         // actually present.  Callers that need to detect deauthorization must
@@ -306,6 +316,7 @@ impl WatcherRegistry {
         }
 
         env.storage().instance().set(&DataKey::Watchers, &updated);
+        Self::extend_instance_ttl(&env);
 
         env.events().publish(
             (symbol_short!("watcher"), symbol_short!("remove")),
@@ -325,6 +336,7 @@ impl WatcherRegistry {
     /// the name now makes explicit *what* the address is being authorized as.
     #[must_use]
     pub fn is_watcher_authorized(env: Env, watcher: Address) -> bool {
+        Self::extend_instance_ttl(&env);
         let watchers = Self::load_watchers(&env);
         for i in 0..watchers.len() {
             if watchers.get(i).unwrap() == watcher {
@@ -364,6 +376,7 @@ impl WatcherRegistry {
 
         let empty: Vec<Address> = vec![&env];
         env.storage().instance().set(&DataKey::Watchers, &empty);
+        Self::extend_instance_ttl(&env);
 
         // Reset the count to zero
         env.storage()
@@ -393,6 +406,24 @@ impl WatcherRegistry {
     ///
     /// Kept for backwards compatibility. Prefer [`get_admins`] when you need
     /// the full admin set.
+    /// Check whether a given address is an admin of the registry.
+    ///
+    /// Returns `false` (not an error) if the contract has not been initialized.
+    /// Read-only entrypoint, requires no authorization.
+    #[must_use]
+    pub fn is_admin(env: Env, address: Address) -> bool {
+        if !env.storage().instance().has(&DataKey::Admins) {
+            return false;
+        }
+        let admins = Self::load_admins(&env);
+        for i in 0..admins.len() {
+            if admins.get(i).unwrap() == address {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn get_admin(env: Env) -> Result<Address, ContractError> {
         let admins = Self::get_admins(env)?;
         // load_admins guarantees at least one entry after initialization
@@ -410,6 +441,15 @@ impl WatcherRegistry {
     }
 
     // ── Internal helpers ─────────────────────────────────────────────────────
+
+    /// Extend the instance storage TTL so a dormant registry is not archived.
+    ///
+    /// Called from every mutating entrypoint and from the hot read path
+    /// (`is_watcher_authorized` / `is_authorized`) to keep the instance alive
+    /// during low-activity periods.
+    fn extend_instance_ttl(env: &Env) {
+        env.storage().instance().extend_ttl(DEFAULT_TTL, DEFAULT_TTL);
+    }
 
     fn increment_watcher_count(env: &Env) {
         let count: u32 = env
@@ -467,6 +507,9 @@ impl WatcherRegistry {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod watcher_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1053,5 +1096,35 @@ mod tests {
 
         // At least two events emitted (remove + replace)
         assert!(env.events().all().len() >= 2);
+    }
+    // 31. is_admin returns true for registered admins, false for non-admins, and false when uninitialized
+    #[test]
+    fn test_is_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(WatcherRegistry, ());
+        let client = WatcherRegistryClient::new(&env, &contract_id);
+
+        let admin1 = Address::generate(&env);
+        let admin2 = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+
+        // Before initialization, is_admin returns false without error
+        assert!(!client.is_admin(&admin1));
+        assert!(!client.is_admin(&admin2));
+        assert!(!client.is_admin(&non_admin));
+
+        // Initialize with admin1
+        client.initialize(&admin1);
+
+        // Add admin2 to verify multi-admin set
+        client.add_admin(&admin1, &admin2);
+
+        // Verify each admin returns true
+        assert!(client.is_admin(&admin1));
+        assert!(client.is_admin(&admin2));
+
+        // Verify non-admin returns false
+        assert!(!client.is_admin(&non_admin));
     }
 }

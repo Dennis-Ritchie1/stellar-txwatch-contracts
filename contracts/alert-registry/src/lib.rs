@@ -18,13 +18,16 @@ pub enum _InvalidWebhookHashContractError {
 #[path = "tests.rs"]
 mod contract_tests;
 
+#[cfg(test)]
+mod error_variant_tests;
+
 // ── TTL constants ─────────────────────────────────────────────────────────────
 
 /// Default TTL applied to persistent storage entries on every write.
 ///
-/// Approximately 24 hours at the nominal 5-second ledger close time.
+/// Approximately 7 days at the nominal 5-second ledger close time (#249).
 /// See `docs/ttl.md` for the full rationale.
-pub const DEFAULT_TTL: u32 = 17_280;
+pub const DEFAULT_TTL: u32 = 120_960;
 
 /// Protocol-enforced upper bound on caller-specified TTL values.
 ///
@@ -47,8 +50,6 @@ pub enum DataKey {
     OwnerIndex(Address),
     /// Stores the list of alert IDs watching a given contract address.
     ContractIndex(Address),
-    /// Monotonic counter used to generate unique alert IDs.
-    NextId,
 }
 
 #[contracterror]
@@ -68,6 +69,9 @@ pub enum ContractError {
     InvalidRuleDescriptor = 9,
     OwnerAlertLimitExceeded = 10,
     DuplicateAlertId = 11,
+    /// A storage write failed, for example because an entry exceeds the protocol size limit.
+    /// Returned as a typed error so callers can tell storage saturation from a bug (#251).
+    StorageError = 13,
 }
 
 // ── Data types ───────────────────────────────────────────────────────────────
@@ -75,7 +79,7 @@ pub enum ContractError {
 /// On-chain configuration for a single alert.
 ///
 /// Stored under [`DataKey::Alert`] with a default TTL of [`DEFAULT_TTL`] ledgers
-/// (~24 hours). Use [`AlertRegistry::bump_alert`] to extend up to [`MAX_TTL`].
+/// (~7 days). Use [`AlertRegistry::bump_alert`] to extend up to [`MAX_TTL`].
 /// See `docs/ttl.md` for expiry details.
 #[contracttype]
 #[derive(Clone)]
@@ -117,7 +121,7 @@ pub struct AlertConfig {
 /// functions behave as before.
 ///
 /// # Storage and TTL
-/// All persistent entries are extended by [`DEFAULT_TTL`] ledgers (~24 hours) on every
+/// All persistent entries are extended by [`DEFAULT_TTL`] ledgers (~7 days) on every
 /// write. Callers can extend any alert up to [`MAX_TTL`] ledgers (~31 days) via
 /// [`bump_alert`]. See `docs/ttl.md` for full details.
 #[contract]
@@ -148,6 +152,8 @@ impl AlertRegistry {
             return Err(ContractError::AlreadyInitialized);
         }
         env.storage().instance().set(&symbol_short!("ADMIN"), &admin);
+        // Emit the admin.init event on first initialisation only (#246).
+        env.events().publish((symbol_short!("admin"), symbol_short!("init")), admin);
         Ok(())
     }
 
@@ -160,6 +166,8 @@ impl AlertRegistry {
         admin.require_auth();
         Self::assert_admin(&env, &admin)?;
         env.storage().instance().set(&symbol_short!("ADMIN"), &new_admin);
+        // Record the handover with both addresses, so the audit trail shows who ceded admin (#247).
+        env.events().publish((symbol_short!("admin"), symbol_short!("transfer")), (admin, new_admin));
         Ok(())
     }
 
@@ -180,6 +188,8 @@ impl AlertRegistry {
         admin.require_auth();
         Self::assert_admin(&env, &admin)?;
         env.storage().instance().set(&symbol_short!("LIMIT"), &limit);
+        // Record every limit change on-chain, so the audit trail shows it (#248).
+        env.events().publish((symbol_short!("admin"), symbol_short!("limit")), (admin, limit));
         Ok(())
     }
 
@@ -254,7 +264,7 @@ impl AlertRegistry {
         Self::validate_rules(&env, &rules)?;
         Self::assert_per_owner_limit(&env, &owner)?;
 
-        let id = Self::next_id(&env);
+        let id = Self::next_id(&env)?;
         let now = env.ledger().timestamp();
 
         let config = AlertConfig {
@@ -284,7 +294,7 @@ impl AlertRegistry {
             (id, owner, target_contract),
         );
 
-        id
+        Ok(id)
     }
 
     /// Update the rules and active flag of an existing alert.
@@ -333,6 +343,12 @@ impl AlertRegistry {
         env.storage()
             .persistent()
             .extend_ttl(&DataKey::ContractIndex(config.target_contract.clone()), DEFAULT_TTL, DEFAULT_TTL);
+
+        env.events().publish(
+            (symbol_short!("alert"), symbol_short!("update")),
+            (config_id, caller, active),
+        );
+
         Ok(())
     }
 
@@ -372,6 +388,12 @@ impl AlertRegistry {
         env.storage()
             .persistent()
             .extend_ttl(&DataKey::ContractIndex(config.target_contract.clone()), DEFAULT_TTL, DEFAULT_TTL);
+
+        env.events().publish(
+            (symbol_short!("alert"), symbol_short!("update")),
+            (config_id, caller, active),
+        );
+
         Ok(())
     }
 
@@ -493,6 +515,8 @@ impl AlertRegistry {
         config_id: u64,
         ttl: u32,
     ) -> Result<(), ContractError> {
+        // Extends all four related entries, so the owner index cannot expire while the alert
+        // is still live and make it disappear from `get_alerts_by_owner` (#254).
         // Clamp the requested TTL to the protocol maximum.
         let effective_ttl = ttl.min(MAX_TTL);
 
@@ -601,7 +625,13 @@ impl AlertRegistry {
     ///
     /// Returns `None` if the alert does not exist or has expired.
     pub fn get_alert(env: Env, config_id: u64) -> Option<AlertConfig> {
-        env.storage().persistent().get(&DataKey::Alert(config_id))
+        let key = DataKey::Alert(config_id);
+        let cfg: Option<AlertConfig> = env.storage().persistent().get(&key);
+        if cfg.is_some() {
+            // A read keeps an alert that is only ever read from archiving (#250).
+            env.storage().persistent().extend_ttl(&key, DEFAULT_TTL, DEFAULT_TTL);
+        }
+        cfg
     }
 
     /// Read the `active` flag of an alert without deserializing the full config.
@@ -874,16 +904,17 @@ impl AlertRegistry {
     /// Atomically read and increment the global alert ID counter.
     ///
     /// Returns the current value before incrementing, so the first ID is `0`.
-    fn next_id(env: &Env) -> u64 {
+    fn next_id(env: &Env) -> Result<u64, ContractError> {
         let id: u64 = env
             .storage()
             .instance()
             .get(&symbol_short!("NEXT_ID"))
             .unwrap_or(0u64);
+        let next = id.checked_add(1).ok_or(ContractError::CounterOverflow)?;
         env.storage()
             .instance()
-            .set(&symbol_short!("NEXT_ID"), &(id + 1));
-        id
+            .set(&symbol_short!("NEXT_ID"), &next);
+        Ok(id)
     }
 
     /// Load the list of alert IDs owned by `owner`, or an empty vec.
@@ -1015,7 +1046,8 @@ impl AlertRegistry {
         let mut out: Vec<AlertConfig> = vec![env];
         let len = ids.len();
         let start = offset.min(len);
-        let end = (offset + limit).min(len);
+        // saturating_add: a huge offset must not overflow the end bound (#265).
+        let end = offset.saturating_add(limit).min(len);
         for i in start..end {
             let id = ids.get(i).unwrap();
             if let Some(cfg) = env.storage().persistent().get(&DataKey::Alert(id)) {
@@ -1112,6 +1144,29 @@ mod tests {
         let cfg = client.get_alert(&id).unwrap();
         assert!(!cfg.active);
         assert_eq!(cfg.rules.get(0).unwrap(), str(&env, "rule:mint"));
+
+        // Verify alert.update event was emitted
+        assert!(env.events().all().len() >= 2);
+    }
+
+    #[test]
+    fn test_update_alert_emits_event() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+
+        let id = client.register_alert(
+            &owner,
+            &target,
+            &str(&env, "Alert"),
+            &str(&env, "hash"),
+            &vec![&env, str(&env, "rule:transfer")],
+        );
+
+        let count_before = env.events().all().len();
+        client.update_alert(&owner, &id, &vec![&env, str(&env, "rule:mint")], &false);
+        let count_after = env.events().all().len();
+        assert_eq!(count_after, count_before + 1);
     }
 
     // 3. Happy path — remove alert
@@ -2841,5 +2896,25 @@ mod tests {
         assert_eq!(MAX_TTL, 535_680);
         // MAX_TTL must be strictly greater than DEFAULT_TTL
         assert!(MAX_TTL > DEFAULT_TTL);
+    }
+
+    // Counter overflow guard test
+    #[test]
+    fn test_counter_overflow_guard() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+
+        env.storage().instance().set(&symbol_short!("NEXT_ID"), &u64::MAX);
+
+        let res = client.try_register_alert(
+            &owner,
+            &target,
+            &str(&env, "alert"),
+            &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            &vec![&env],
+        );
+
+        assert_eq!(res.unwrap_err().unwrap(), ContractError::CounterOverflow);
     }
 }

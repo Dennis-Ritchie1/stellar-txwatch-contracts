@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract [Unreleased] section from CHANGELOG.md
+        id: changelog
+        run: |
+          set -euo pipefail
+          # Extract everything between the [Unreleased] heading and the next
+          # top-level version heading (## [x.y.z]).
+          awk '
+            /^## \[Unreleased\]/ { capture = 1; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md > release_notes.md
+
+          if [ ! -s release_notes.md ]; then
+            echo "No [Unreleased] section found in CHANGELOG.md; falling back to tag name." >&2
+            echo "Release ${GITHUB_REF_NAME}" > release_notes.md
+          fi
+
+          echo "----- Release notes -----"
+          cat release_notes.md
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trigger publish-bindings workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'publish-bindings.yml',
+              ref: context.ref,
+            });
+
+      - name: Trigger publish-abis workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'publish-abis.yml',
+              ref: context.ref,
+            });

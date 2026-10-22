@@ -523,3 +523,20 @@ Returns the configured `WatcherRegistry` contract address, or `None` if watcher-
 This contract is safe to call from other Soroban contracts. Soroban executes contract calls atomically and does not allow classic callback-style re-entrancy into the same contract within the same transaction.
 
 All state-mutating functions in `AlertRegistry` first enforce authorization with `require_auth()` and then perform local storage updates. There are no external callbacks or indirect contract calls during state mutation, so cross-contract invocation cannot introduce re-entrancy vulnerabilities.
+
+## Compiled status of documented functions
+
+This reference describes the deployed contract. These functions appear above but are **not** in
+the compiled `lib.rs` (they exist only in the uncompiled `contract.rs`): `propose_webhook`,
+`confirm_webhook` and `renew_alert_ttl`. Do not call them against a deployment built from `lib.rs`.
+
+### `get_active_alert_count`
+
+```text
+get_active_alert_count(env, owner: Address) -> u32
+```
+
+Returns how many live alerts `owner` has. Read-only, no auth. Counts only the alerts in the owner's
+index that still exist, so an archived alert is not counted.
+
+`get_alert_count_for_contract` is not in the compiled contract and is not documented here.
