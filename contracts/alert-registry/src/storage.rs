@@ -20,7 +20,7 @@ pub fn next_id(env: &Env) -> u64 {
         .set(&DataKey::NextId, &(id + 1));
     env.storage()
         .persistent()
-        .extend_ttl(&DataKey::NextId, 100, 100);
+        .extend_ttl(&DataKey::NextId, DEFAULT_TTL, DEFAULT_TTL);
     id
 }
 

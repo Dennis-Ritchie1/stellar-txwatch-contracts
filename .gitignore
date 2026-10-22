@@ -4,8 +4,10 @@ target/
 # Cargo lock (library crates; keep for binaries if needed)
 Cargo.lock
 
-# Soroban test snapshots
+# Soroban / insta test snapshots
 **/test_snapshots/
+**/*.snap
+**/*.snap.new
 
 # IDE / editor
 .vscode/
@@ -14,6 +16,7 @@ Cargo.lock
 *.swp
 *.swo
 .DS_Store
+Thumbs.db
 
 # Generated ABI output (local runs)
 abi/
@@ -25,3 +28,15 @@ abi/
 .env
 .env.*
 !.env.example
+
+# Node / TypeScript bindings build artefacts
+node_modules/
+bindings/**/node_modules/
+bindings/**/.stellar/
+bindings/**/dist/
+bindings/**/build/
+*.tsbuildinfo
+
+# OS / misc
+*.orig
+*.bak
