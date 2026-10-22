@@ -30,6 +30,10 @@ fn setup() -> (Env, AlertRegistryClient<'static>, Address, Address) {
     (env, client, owner, target)
 }
 
+fn hash64(env: &Env) -> String {
+    String::from_str(env, "a3f1b2c4d5e6f7089abcdef01234567890abcdef01234567890abcdef012345")
+}
+
 #[test]
 fn register_emits_alert_register() {
     let (env, client, owner, target) = setup();
@@ -37,7 +41,7 @@ fn register_emits_alert_register() {
         &owner,
         &target,
         &String::from_str(&env, "alert"),
-        &String::from_str(&env, "hash"),
+        &hash64(&env),
         &vec![&env, String::from_str(&env, "rule:transfer")],
     );
     assert!(emitted(&env, "alert", "register"));
@@ -50,7 +54,7 @@ fn remove_emits_alert_remove() {
         &owner,
         &target,
         &String::from_str(&env, "alert"),
-        &String::from_str(&env, "hash"),
+        &hash64(&env),
         &vec![&env, String::from_str(&env, "rule:transfer")],
     );
     client.remove_alert(&owner, &id);
@@ -64,7 +68,7 @@ fn bump_emits_alert_bump() {
         &owner,
         &target,
         &String::from_str(&env, "alert"),
-        &String::from_str(&env, "hash"),
+        &hash64(&env),
         &vec![&env, String::from_str(&env, "rule:transfer")],
     );
     client.bump_alert(&id, &1_000);

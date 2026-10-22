@@ -1,7 +1,6 @@
 //! One test per `ContractError` variant that the compiled `AlertRegistry` can return (#259).
 //!
-//! `DuplicateAlertId` and `NoPendingWebhook` are not covered: the compiled `lib.rs` has no
-//! webhook propose/confirm flow, and duplicate IDs cannot be produced through the public API.
+//! `DuplicateAlertId` is not covered: duplicate IDs cannot be produced through the public API.
 
 #![cfg(test)]
 
@@ -19,6 +18,10 @@ fn setup() -> (Env, AlertRegistryClient<'static>) {
 
 fn s(env: &Env, text: &str) -> String {
     String::from_str(env, text)
+}
+
+fn hash64(env: &Env) -> String {
+    String::from_str(env, "a3f1b2c4d5e6f7089abcdef01234567890abcdef01234567890abcdef012345")
 }
 
 #[test]
@@ -47,7 +50,7 @@ fn unauthorized_when_a_stranger_removes_an_alert() {
         &owner,
         &target,
         &s(&env, "alert"),
-        &s(&env, "hash"),
+        &hash64(&env),
         &vec![&env, s(&env, "rule:transfer")],
     );
     let result = client.try_remove_alert(&stranger, &id);
@@ -70,7 +73,7 @@ fn invalid_rule_descriptor_for_an_unknown_rule() {
         &owner,
         &target,
         &s(&env, "alert"),
-        &s(&env, "hash"),
+        &hash64(&env),
         &vec![&env, s(&env, "rule:bogus")],
     );
     assert_eq!(result, Err(Ok(ContractError::InvalidRuleDescriptor)));
@@ -86,8 +89,91 @@ fn owner_alert_limit_exceeded_on_the_second_registration() {
     let owner = Address::generate(&env);
     let target = Address::generate(&env);
     let rules = vec![&env, s(&env, "rule:transfer")];
-    client.register_alert(&owner, &target, &s(&env, "first"), &s(&env, "hash"), &rules);
+    client.register_alert(&owner, &target, &s(&env, "first"), &hash64(&env), &rules);
 
-    let result = client.try_register_alert(&owner, &target, &s(&env, "second"), &s(&env, "hash"), &rules);
+    let result = client.try_register_alert(&owner, &target, &s(&env, "second"), &hash64(&env), &rules);
     assert_eq!(result, Err(Ok(ContractError::OwnerAlertLimitExceeded)));
+}
+
+/// #206 — empty rules vec is rejected.
+#[test]
+fn empty_rules_returns_empty_rules_error() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    let result = client.try_register_alert(
+        &owner,
+        &target,
+        &s(&env, "alert"),
+        &hash64(&env),
+        &vec![&env],
+    );
+    assert_eq!(result, Err(Ok(ContractError::EmptyRules)));
+}
+
+/// #207 — duplicate rule descriptors are rejected.
+#[test]
+fn duplicate_rule_returns_duplicate_rule_error() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    let result = client.try_register_alert(
+        &owner,
+        &target,
+        &s(&env, "alert"),
+        &hash64(&env),
+        &vec![&env, s(&env, "rule:transfer"), s(&env, "rule:transfer")],
+    );
+    assert_eq!(result, Err(Ok(ContractError::DuplicateRule)));
+}
+
+/// #208 — webhook_hash shorter than 64 chars is rejected.
+#[test]
+fn invalid_webhook_hash_too_short() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    let result = client.try_register_alert(
+        &owner,
+        &target,
+        &s(&env, "alert"),
+        &s(&env, "tooshort"),
+        &vec![&env, s(&env, "rule:transfer")],
+    );
+    assert_eq!(result, Err(Ok(ContractError::InvalidWebhookHash)));
+}
+
+/// #208 — webhook_hash longer than 64 chars is rejected.
+#[test]
+fn invalid_webhook_hash_too_long() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    // 65 chars
+    let long_hash = s(&env, "a3f1b2c4d5e6f7089abcdef01234567890abcdef01234567890abcdef0123456");
+    let result = client.try_register_alert(
+        &owner,
+        &target,
+        &s(&env, "alert"),
+        &long_hash,
+        &vec![&env, s(&env, "rule:transfer")],
+    );
+    assert_eq!(result, Err(Ok(ContractError::InvalidWebhookHash)));
+}
+
+/// #208 — update_webhook with short hash is rejected.
+#[test]
+fn update_webhook_rejects_invalid_hash() {
+    let (env, client) = setup();
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    let id = client.register_alert(
+        &owner,
+        &target,
+        &s(&env, "alert"),
+        &hash64(&env),
+        &vec![&env, s(&env, "rule:transfer")],
+    );
+    let result = client.try_update_webhook(&owner, &id, &s(&env, "not-64-chars"));
+    assert_eq!(result, Err(Ok(ContractError::InvalidWebhookHash)));
 }

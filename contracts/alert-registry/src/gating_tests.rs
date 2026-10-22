@@ -10,6 +10,10 @@ use watcher_registry::WatcherRegistry;
 
 use crate::{AlertRegistry, AlertRegistryClient, ContractError};
 
+fn hash64(env: &Env) -> String {
+    String::from_str(env, "a3f1b2c4d5e6f7089abcdef01234567890abcdef01234567890abcdef012345")
+}
+
 fn setup() -> (Env, AlertRegistryClient<'static>, watcher_registry::WatcherRegistryClient<'static>, Address) {
     let env = Env::default();
     env.mock_all_auths();
@@ -29,7 +33,7 @@ fn setup() -> (Env, AlertRegistryClient<'static>, watcher_registry::WatcherRegis
         &owner,
         &target,
         &String::from_str(&env, "alert"),
-        &String::from_str(&env, "hash"),
+        &hash64(&env),
         &vec![&env, String::from_str(&env, "rule:transfer")],
     );
     (env, alert, watcher, admin)
