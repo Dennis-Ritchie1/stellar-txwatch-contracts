@@ -73,6 +73,8 @@ pub enum ContractError {
     InvalidRuleDescriptor = 9,
     OwnerAlertLimitExceeded = 10,
     DuplicateAlertId = 11,
+    /// Returned when `confirm_webhook` is called but no rotation is pending.
+    NoPendingWebhook = 12,
     /// A storage write failed, for example because an entry exceeds the protocol size limit.
     /// Returned as a typed error so callers can tell storage saturation from a bug (#251).
     StorageError = 13,
@@ -106,6 +108,11 @@ pub struct AlertConfig {
     pub updated_at: u64,
     /// Whether the alert is currently active.
     pub active: bool,
+    /// Pending webhook hash proposed via `propose_webhook` but not yet confirmed.
+    ///
+    /// `None` means no rotation is in progress. Once the owner calls
+    /// `confirm_webhook`, this value is promoted to `webhook_hash` and cleared.
+    pub pending_webhook_hash: Option<String>,
 }
 
 // ── Contract ─────────────────────────────────────────────────────────────────
@@ -311,6 +318,7 @@ impl AlertRegistry {
             created_at: now,
             updated_at: now,
             active: true,
+            pending_webhook_hash: None,
         };
 
         env.storage().persistent().set(&DataKey::Alert(id), &config);
@@ -429,6 +437,118 @@ impl AlertRegistry {
         env.events().publish(
             (symbol_short!("alert"), symbol_short!("update")),
             (config_id, caller, active),
+        );
+
+        Ok(())
+    }
+
+    /// Propose a new webhook hash for an existing alert (step 1 of 2).
+    ///
+    /// The new hash is stored in `pending_webhook_hash` and does **not** replace
+    /// the live `webhook_hash` yet. The owner must call [`confirm_webhook`] to
+    /// complete the rotation. This two-step flow prevents a window where the old
+    /// webhook is deactivated before the new one is confirmed by the off-chain
+    /// watcher.
+    ///
+    /// Calling `propose_webhook` again before confirming overwrites the previous
+    /// pending hash, allowing the owner to correct a mistake.
+    ///
+    /// # Auth
+    /// Requires a valid Stellar auth signature from `caller`, who must also be
+    /// the original owner of the alert.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::AlertNotFound`] if `config_id` does not exist.
+    /// Returns [`ContractError::Unauthorized`] if `caller` is not the alert owner.
+    ///
+    /// # Events
+    /// Emits `(Symbol("alert"), Symbol("wh_prop"))` with data `(id: u64, caller: Address)`.
+    pub fn propose_webhook(
+        env: Env,
+        caller: Address,
+        config_id: u64,
+        new_webhook_hash: String,
+    ) -> Result<(), ContractError> {
+        caller.require_auth();
+
+        let mut config: AlertConfig = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Alert(config_id))
+            .ok_or(ContractError::AlertNotFound)?;
+
+        Self::assert_owner(&config, &caller)?;
+
+        config.pending_webhook_hash = Some(new_webhook_hash);
+        config.updated_at = env.ledger().timestamp();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Alert(config_id), &config);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Alert(config_id), DEFAULT_TTL, DEFAULT_TTL);
+
+        env.events().publish(
+            (symbol_short!("alert"), symbol_short!("wh_prop")),
+            (config_id, caller),
+        );
+
+        Ok(())
+    }
+
+    /// Confirm a pending webhook hash rotation (step 2 of 2).
+    ///
+    /// Promotes `pending_webhook_hash` to `webhook_hash` and clears the pending
+    /// field. The caller must have previously called [`propose_webhook`] for this
+    /// alert. Returns [`ContractError::NoPendingWebhook`] if no rotation is in
+    /// progress.
+    ///
+    /// # Auth
+    /// Requires a valid Stellar auth signature from `caller`, who must also be
+    /// the original owner of the alert.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::AlertNotFound`] if `config_id` does not exist.
+    /// Returns [`ContractError::Unauthorized`] if `caller` is not the alert owner.
+    /// Returns [`ContractError::NoPendingWebhook`] if no pending hash exists.
+    ///
+    /// # Events
+    /// Emits `(Symbol("alert"), Symbol("webhook"))` with data `(id: u64, caller: Address)`.
+    pub fn confirm_webhook(
+        env: Env,
+        caller: Address,
+        config_id: u64,
+    ) -> Result<(), ContractError> {
+        caller.require_auth();
+
+        let mut config: AlertConfig = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Alert(config_id))
+            .ok_or(ContractError::AlertNotFound)?;
+
+        Self::assert_owner(&config, &caller)?;
+
+        let pending = config
+            .pending_webhook_hash
+            .take()
+            .ok_or(ContractError::NoPendingWebhook)?;
+
+        config.webhook_hash = pending;
+        config.updated_at = env.ledger().timestamp();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Alert(config_id), &config);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Alert(config_id), DEFAULT_TTL, DEFAULT_TTL);
+
+        // #204: emit the canonical alert.webhook event (not the non-standard wh_conf).
+        env.events().publish(
+            (symbol_short!("alert"), symbol_short!("webhook")),
+            (config_id, caller),
         );
 
         Ok(())
@@ -961,8 +1081,33 @@ impl AlertRegistry {
 
     fn assert_per_owner_limit(env: &Env, owner: &Address) -> Result<(), ContractError> {
         let limit = Self::get_per_owner_alert_limit(env.clone());
-        if limit > 0 && Self::get_active_alert_count(env.clone(), owner.clone()) >= limit {
-            return Err(ContractError::OwnerAlertLimitExceeded);
+        if limit > 0 {
+            let ids = Self::owner_index(env, owner);
+            let mut live_ids: Vec<u64> = vec![env];
+            for i in 0..ids.len() {
+                let id = ids.get(i).unwrap();
+                if env.storage().persistent().has(&DataKey::Alert(id)) {
+                    live_ids.push_back(id);
+                }
+            }
+            // #205: prune stale/expired IDs from the index lazily.
+            if live_ids.len() != ids.len() {
+                if live_ids.is_empty() {
+                    env.storage()
+                        .persistent()
+                        .remove(&DataKey::OwnerIndex(owner.clone()));
+                } else {
+                    env.storage()
+                        .persistent()
+                        .set(&DataKey::OwnerIndex(owner.clone()), &live_ids);
+                    env.storage()
+                        .persistent()
+                        .extend_ttl(&DataKey::OwnerIndex(owner.clone()), DEFAULT_TTL, DEFAULT_TTL);
+                }
+            }
+            if live_ids.len() >= limit {
+                return Err(ContractError::OwnerAlertLimitExceeded);
+            }
         }
         Ok(())
     }
@@ -1081,12 +1226,19 @@ impl AlertRegistry {
                 updated.push_back(v);
             }
         }
-        env.storage()
-            .persistent()
-            .set(&DataKey::OwnerIndex(owner.clone()), &updated);
-        env.storage()
-            .persistent()
-            .extend_ttl(&DataKey::OwnerIndex(owner.clone()), DEFAULT_TTL, DEFAULT_TTL);
+        // #203: delete the key instead of writing an empty vec to avoid storage leaks.
+        if updated.is_empty() {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::OwnerIndex(owner.clone()));
+        } else {
+            env.storage()
+                .persistent()
+                .set(&DataKey::OwnerIndex(owner.clone()), &updated);
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::OwnerIndex(owner.clone()), DEFAULT_TTL, DEFAULT_TTL);
+        }
     }
 
     /// Remove `id` from the contract's index and persist the updated list.
@@ -1099,12 +1251,19 @@ impl AlertRegistry {
                 updated.push_back(v);
             }
         }
-        env.storage()
-            .persistent()
-            .set(&DataKey::ContractIndex(target.clone()), &updated);
-        env.storage()
-            .persistent()
-            .extend_ttl(&DataKey::ContractIndex(target.clone()), DEFAULT_TTL, DEFAULT_TTL);
+        // #203: delete the key instead of writing an empty vec to avoid storage leaks.
+        if updated.is_empty() {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::ContractIndex(target.clone()));
+        } else {
+            env.storage()
+                .persistent()
+                .set(&DataKey::ContractIndex(target.clone()), &updated);
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::ContractIndex(target.clone()), DEFAULT_TTL, DEFAULT_TTL);
+        }
     }
 
     /// Resolve a list of alert IDs to their stored [`AlertConfig`] values.
