@@ -387,10 +387,7 @@ impl AlertRegistry {
         }
         owner.require_auth();
 
-        if label.len() > 128 {
-            return Err(ContractError::LabelTooLong);
-        }
-
+        Self::validate_label(&label)?;
         Self::validate_rules(&env, &rules)?;
         Self::assert_per_owner_limit(&env, &owner)?;
 
@@ -676,9 +673,7 @@ impl AlertRegistry {
         Self::assert_not_paused(&env)?;
         caller.require_auth();
 
-        if label.len() > 128 {
-            return Err(ContractError::LabelTooLong);
-        }
+        Self::validate_label(&label)?;
 
         let mut config: AlertConfig = env
             .storage()
@@ -1235,6 +1230,14 @@ impl AlertRegistry {
             if live_ids.len() >= limit {
                 return Err(ContractError::OwnerAlertLimitExceeded);
             }
+        }
+        Ok(())
+    }
+
+    /// Validate that a label does not exceed the 128-byte limit.
+    fn validate_label(label: &String) -> Result<(), ContractError> {
+        if label.len() > 128 {
+            return Err(ContractError::LabelTooLong);
         }
         Ok(())
     }

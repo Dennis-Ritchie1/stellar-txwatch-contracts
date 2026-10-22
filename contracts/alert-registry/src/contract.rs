@@ -39,10 +39,7 @@ impl AlertRegistry {
         owner.require_auth();
         assert_not_paused(&env)?;
 
-        if label.len() > 128 {
-            return Err(ContractError::LabelTooLong);
-        }
-
+        validate_label(&label)?;
         validate_rules(&env, &rules)?;
         assert_per_owner_limit(&env, &owner)?;
 
@@ -88,7 +85,7 @@ impl AlertRegistry {
             .ok_or(ContractError::AlertNotFound)?;
 
         assert_owner(&config, &owner)?;
-        validate_rules(&env, &rules);
+        validate_rules(&env, &rules)?;
 
         config.rules = rules;
         config.active = active;
@@ -553,6 +550,13 @@ fn assert_per_owner_limit(env: &Env, owner: &Address) -> Result<(), ContractErro
         if count >= limit {
             return Err(ContractError::OwnerAlertLimitExceeded);
         }
+    }
+    Ok(())
+}
+
+fn validate_label(label: &String) -> Result<(), ContractError> {
+    if label.len() > 128 {
+        return Err(ContractError::LabelTooLong);
     }
     Ok(())
 }
