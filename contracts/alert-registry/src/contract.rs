@@ -14,6 +14,7 @@
 use soroban_sdk::{symbol_short, Address, Env, String, Vec};
 
 use crate::storage;
+use crate::types::DataKey;
 use crate::types::{AlertConfig, AlertInput, ContractError, MAX_BATCH_SIZE};
 
 pub struct AlertRegistry;
@@ -36,6 +37,7 @@ impl AlertRegistry {
         rules: Vec<String>,
     ) -> Result<u64, ContractError> {
         owner.require_auth();
+        assert_not_paused(&env)?;
 
         if label.len() > 128 {
             return Err(ContractError::LabelTooLong);
@@ -80,6 +82,7 @@ impl AlertRegistry {
         active: bool,
     ) -> Result<(), ContractError> {
         owner.require_auth();
+        assert_not_paused(&env)?;
 
         let mut config = storage::get_alert(&env, config_id)
             .ok_or(ContractError::AlertNotFound)?;
@@ -109,6 +112,7 @@ impl AlertRegistry {
         webhook_hash: String,
     ) -> Result<(), ContractError> {
         caller.require_auth();
+        assert_not_paused(&env)?;
 
         let mut config = storage::get_alert(&env, config_id)
             .ok_or(ContractError::AlertNotFound)?;
@@ -156,6 +160,7 @@ impl AlertRegistry {
         new_webhook_hash: String,
     ) -> Result<(), ContractError> {
         caller.require_auth();
+        assert_not_paused(&env)?;
 
         let mut config = storage::get_alert(&env, config_id)
             .ok_or(ContractError::AlertNotFound)?;
@@ -199,6 +204,7 @@ impl AlertRegistry {
         config_id: u64,
     ) -> Result<(), ContractError> {
         caller.require_auth();
+        assert_not_paused(&env)?;
 
         let mut config = storage::get_alert(&env, config_id)
             .ok_or(ContractError::AlertNotFound)?;
@@ -243,6 +249,7 @@ impl AlertRegistry {
         config_id: u64,
     ) -> Result<(), ContractError> {
         caller.require_auth();
+        assert_not_paused(&env)?;
 
         let config = storage::get_alert(&env, config_id)
             .ok_or(ContractError::AlertNotFound)?;
@@ -265,6 +272,7 @@ impl AlertRegistry {
         config_id: u64,
     ) -> Result<(), ContractError> {
         caller.require_auth();
+        assert_not_paused(&env)?;
 
         let config = storage::get_alert(&env, config_id)
             .ok_or(ContractError::AlertNotFound)?;
@@ -295,6 +303,7 @@ impl AlertRegistry {
         new_admin: Address,
     ) -> Result<(), ContractError> {
         admin.require_auth();
+        assert_not_paused(&env)?;
         assert_admin(&env, &admin)?;
         storage::set_admin(&env, &new_admin);
         Ok(())
@@ -312,6 +321,7 @@ impl AlertRegistry {
         limit: u32,
     ) -> Result<(), ContractError> {
         admin.require_auth();
+        assert_not_paused(&env)?;
         assert_admin(&env, &admin)?;
         storage::set_limit(&env, limit);
         Ok(())
@@ -332,6 +342,7 @@ impl AlertRegistry {
         config_id: u64,
     ) -> Result<(), ContractError> {
         admin.require_auth();
+        assert_not_paused(&env)?;
         assert_admin(&env, &admin)?;
 
         let config = storage::get_alert(&env, config_id)
@@ -412,6 +423,42 @@ impl AlertRegistry {
         }
         count
     }
+
+    /// Pause or unpause all mutating operations (admin only).
+    ///
+    /// When paused, every mutating entry point returns
+    /// [`ContractError::ContractPaused`]. Read-only functions are unaffected.
+    ///
+    /// # Events
+    /// Emits `(Symbol("admin"), Symbol("pause"))` when pausing and
+    /// `(Symbol("admin"), Symbol("unpause"))` when unpausing.
+    pub fn set_paused(
+        env: Env,
+        admin: Address,
+        paused: bool,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        assert_admin(&env, &admin)?;
+
+        env.storage().instance().set(&DataKey::Paused, &paused);
+
+        let topic = if paused {
+            symbol_short!("pause")
+        } else {
+            symbol_short!("unpause")
+        };
+        env.events().publish((symbol_short!("admin"), topic), admin);
+
+        Ok(())
+    }
+
+    /// Return whether the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
@@ -422,6 +469,18 @@ fn assert_owner(config: &AlertConfig, caller: &Address) -> Result<(), ContractEr
     } else {
         Err(ContractError::Unauthorized)
     }
+}
+
+fn assert_not_paused(env: &Env) -> Result<(), ContractError> {
+    let paused: bool = env
+        .storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false);
+    if paused {
+        return Err(ContractError::ContractPaused);
+    }
+    Ok(())
 }
 
 fn assert_admin(env: &Env, caller: &Address) -> Result<(), ContractError> {
