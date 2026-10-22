@@ -1,4 +1,4 @@
-#![no_std]
+﻿#![no_std]
 #![warn(clippy::pedantic)]
 use soroban_sdk::{
     contract, contractimpl, contracttype, contracterror, symbol_short, vec, Address, Env, String, Vec,
@@ -771,6 +771,14 @@ impl AlertRegistry {
         env.storage()
             .persistent()
             .extend_ttl(&DataKey::ContractIndex(config.target_contract), effective_ttl, effective_ttl);
+        // Also extend the global ID counter (issue #212).  NextId must not
+        // expire independently of the alert entries it produced — if it did,
+        // the next registration would restart from 0 and collide with live IDs.
+        if env.storage().persistent().has(&DataKey::NextId) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::NextId, effective_ttl, effective_ttl);
+        }
 
         // Fix #212: also extend the NextId counter so it cannot expire independently
         // of alert data when a contract only receives TTL renewals and no new
@@ -3537,3 +3545,4 @@ mod tests {
         assert_eq!(emitted_owner, owner, "event must contain the original alert owner");
     }
 }
+

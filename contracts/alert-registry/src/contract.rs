@@ -261,6 +261,10 @@ impl AlertRegistry {
         // Extend both index entries so they stay alive as long as the alert.
         storage::extend_owner_index_ttl(&env, &config.owner);
         storage::extend_contract_index_ttl(&env, &config.target_contract);
+        // Extend the global ID counter so it cannot expire independently of
+        // the alert data.  If NextId expires and the next registration restarts
+        // from 0, it would collide with existing alert IDs.  See issue #212.
+        storage::extend_next_id_ttl(&env);
 
         Ok(())
     }
@@ -676,3 +680,4 @@ mod tests {
         assert_eq!(client.get_per_owner_alert_limit(), Some(5u32));
     }
 }
+
