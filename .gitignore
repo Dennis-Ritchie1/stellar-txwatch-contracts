@@ -21,6 +21,7 @@ llvm-cov-target/
 *.iml
 *.swp
 *.swo
+*.orig
 .DS_Store
 *.orig
 

@@ -4,14 +4,6 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, contracterror, symbol_short, vec, Address, Env, String, Vec,
 };
 
-// ── Errors ────────────────────────────────────────────────────────────────────
-
-#[allow(dead_code)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum _InvalidWebhookHashContractError {
-    InvalidWebhookHash = 1,
-}
-
 // ── Storage keys ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -97,6 +89,7 @@ pub enum ContractError {
     /// Returned when a watcher registry is configured and the querying address
     /// is not a registered watcher.
     NotAWatcher = 5,
+    /// Returned when `webhook_hash` is not exactly 64 hex characters (#208).
     InvalidWebhookHash = 6,
     LabelTooLong = 7,
     TooManyRules = 8,
@@ -2196,29 +2189,22 @@ mod tests {
         );
     }
 
-    // 19. Register an alert with exactly 50 valid rule strings.
+    // 19. Register an alert with all valid rule descriptors (no duplicates).
     //
-    // This verifies that the contract handles the maximum allowed rule count
-    // without hitting Soroban instruction limits. We alternate between the
-    // two valid rule descriptors ("rule:transfer" and "rule:mint") to fill
-    // all 50 slots, then confirm every entry is stored correctly.
+    // Since only two valid descriptors exist ("rule:transfer" and "rule:mint"),
+    // the maximum without duplicates is 2. This verifies both are accepted
+    // together and stored correctly.
     #[test]
-    fn test_register_alert_with_50_rules_no_instruction_limit() {
+    fn test_register_alert_with_all_valid_rules() {
         let (env, client) = setup();
         let owner = Address::generate(&env);
         let target = Address::generate(&env);
 
-        // Build a vec of 50 valid rules, alternating between the two
-        // accepted descriptors so the list is realistic.
-        let mut rules: Vec<String> = vec![&env];
-        for i in 0..50u32 {
-            let rule = if i % 2 == 0 {
-                str(&env, "rule:transfer")
-            } else {
-                str(&env, "rule:mint")
-            };
-            rules.push_back(rule);
-        }
+        let rules = vec![
+            &env,
+            str(&env, "rule:transfer"),
+            str(&env, "rule:mint"),
+        ];
 
         let id = client.register_alert(
             &owner,
@@ -2229,17 +2215,9 @@ mod tests {
         );
 
         let cfg = client.get_alert(&id).unwrap();
-        assert_eq!(
-            cfg.rules.len(),
-            50,
-            "all 50 rules should be persisted"
-        );
-
-        // Spot-check a few entries to confirm data integrity.
+        assert_eq!(cfg.rules.len(), 2, "both rules should be persisted");
         assert_eq!(cfg.rules.get(0).unwrap(), str(&env, "rule:transfer"));
         assert_eq!(cfg.rules.get(1).unwrap(), str(&env, "rule:mint"));
-        assert_eq!(cfg.rules.get(48).unwrap(), str(&env, "rule:transfer"));
-        assert_eq!(cfg.rules.get(49).unwrap(), str(&env, "rule:mint"));
     }
 
     // ── Feature A: update_label ───────────────────────────────────────────────
@@ -3036,6 +3014,7 @@ mod tests {
     #[test]
     fn test_get_alerts_by_owner_paginated() {
         let (env, client) = setup();
+        let querier = Address::generate(&env);
         let owner = Address::generate(&env);
         let target = Address::generate(&env);
 
@@ -3044,15 +3023,15 @@ mod tests {
         }
 
         // first page
-        let page1 = client.get_alerts_by_owner_paginated(&owner, &0u32, &3u32);
+        let page1 = client.get_alerts_by_owner_paginated(&querier, &owner, &0u32, &3u32).unwrap();
         assert_eq!(page1.len(), 3);
 
         // second page
-        let page2 = client.get_alerts_by_owner_paginated(&owner, &3u32, &3u32);
+        let page2 = client.get_alerts_by_owner_paginated(&querier, &owner, &3u32, &3u32).unwrap();
         assert_eq!(page2.len(), 2);
 
         // offset beyond length returns empty
-        let empty = client.get_alerts_by_owner_paginated(&owner, &10u32, &3u32);
+        let empty = client.get_alerts_by_owner_paginated(&querier, &owner, &10u32, &3u32).unwrap();
         assert_eq!(empty.len(), 0);
     }
 
@@ -3060,6 +3039,7 @@ mod tests {
     #[test]
     fn test_get_contract_alerts_paginated() {
         let (env, client) = setup();
+        let querier = Address::generate(&env);
         let owner = Address::generate(&env);
         let target = Address::generate(&env);
 
@@ -3067,7 +3047,7 @@ mod tests {
             client.register_alert(&owner, &target, &str(&env, label), &hash64(&env), &vec![&env, str(&env, "rule:transfer")]);
         }
 
-        let page = client.get_contract_alerts_paginated(&target, &1u32, &2u32);
+        let page = client.get_contract_alerts_paginated(&querier, &target, &1u32, &2u32).unwrap();
         assert_eq!(page.len(), 2);
     }
 

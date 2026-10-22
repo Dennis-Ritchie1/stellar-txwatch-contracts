@@ -15,6 +15,10 @@ fn unauthed() -> (Env, AlertRegistryClient<'static>) {
     (env.clone(), AlertRegistryClient::new(&env, &contract_id))
 }
 
+fn hash64(env: &Env) -> String {
+    String::from_str(env, "a3f1b2c4d5e6f7089abcdef01234567890abcdef01234567890abcdef012345")
+}
+
 #[test]
 fn register_alert_requires_owner_auth() {
     let (env, client) = unauthed();

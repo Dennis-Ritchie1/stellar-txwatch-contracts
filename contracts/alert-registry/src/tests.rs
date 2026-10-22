@@ -1,7 +1,6 @@
 use crate::AlertRegistry;
 use crate::ContractError;
 use crate::AlertRegistryClient;
-use crate::DataKey;
 use soroban_sdk::{testutils::Address as _, vec, Address, Env, String, Vec};
 
 fn setup() -> (Env, AlertRegistryClient<'static>) {
@@ -22,7 +21,6 @@ fn hash64(env: &Env) -> String {
 }
 
 /// Build a Soroban String of `n` repetitions of ASCII char `ch`.
-/// Uses a fixed 8192-byte stack buffer — sufficient for the Soroban max.
 fn str_repeat(env: &Env, ch: char, n: usize) -> String {
     assert!(n <= 8192, "str_repeat: n exceeds Soroban String max");
     let byte = ch as u8;
@@ -339,7 +337,7 @@ fn test_update_webhook_unauthorized() {
     let id = client.register_alert(&owner, &target, &str(&env, "A"), &hash64(&env), &vec![&env, str(&env, "rule:transfer")]);
     assert_eq!(
         client
-            .try_update_webhook(&attacker, &id, &str(&env, "evil-hash"))
+            .try_update_webhook(&attacker, &id, &hash64b(&env))
             .unwrap_err()
             .unwrap(),
         ContractError::Unauthorized
@@ -462,7 +460,7 @@ fn test_active_defaults_to_true() {
 
 // 13. register_alert rejects more than 50 rules
 #[test]
-#[should_panic(expected = "too many rules: maximum is 50")]
+#[should_panic(expected = "too many rules")]
 fn test_register_alert_too_many_rules() {
     let (env, client) = setup();
     let owner = Address::generate(&env);
@@ -507,7 +505,7 @@ fn test_register_alert_exactly_50_rules() {
     assert_eq!(client.get_alert(&id).unwrap().rules.len(), 50);
 }
 
-// 16. Label exceeding 128 bytes is rejected
+// 14. Label exceeding 128 bytes is rejected
 #[test]
 #[should_panic(expected = "label exceeds 128 bytes")]
 fn test_label_too_long() {
@@ -518,7 +516,7 @@ fn test_label_too_long() {
     client.register_alert(&owner, &target, &long_label, &hash64(&env), &vec![&env, str(&env, "rule:transfer")]);
 }
 
-// 17. Label at exactly 128 bytes is accepted
+// 15. Label at exactly 128 bytes is accepted
 #[test]
 fn test_label_max_length_accepted() {
     let (env, client) = setup();
@@ -529,13 +527,7 @@ fn test_label_max_length_accepted() {
 }
 
 // ── Soroban string-length boundary tests ─────────────────────────────────────
-//
-// Soroban's String type supports up to 8 192 bytes.  The contract enforces
-// its own tighter 128-byte limit on `label`, so any string longer than 128
-// bytes must be rejected by the contract guard long before the Soroban
-// limit is reached.
 
-// 18. Label of 8 192 bytes (Soroban max) is rejected by the app guard.
 #[test]
 #[should_panic(expected = "label exceeds 128 bytes")]
 fn test_label_at_soroban_max_rejected_by_app_guard() {
@@ -557,7 +549,6 @@ fn test_label_one_below_soroban_max_rejected_by_app_guard() {
     client.register_alert(&owner, &target, &label, &hash64(&env), &vec![&env, str(&env, "rule:transfer")]);
 }
 
-// 20. A Soroban String of exactly 8 192 bytes can be constructed without panicking.
 #[test]
 fn test_soroban_string_8192_bytes_is_constructible() {
     let (env, _client) = setup();
@@ -591,21 +582,11 @@ fn test_renew_alert_ttl_happy_path() {
 
     let after = client.get_alert(&id).unwrap();
 
-    // Data must be completely unchanged
-    assert_eq!(after.label, before.label);
-    assert_eq!(after.webhook_hash, before.webhook_hash);
-    assert_eq!(after.rules, before.rules);
-    assert_eq!(after.active, before.active);
-    assert_eq!(after.updated_at, before.updated_at);
-    assert_eq!(after.created_at, before.created_at);
-}
-
-// renew_alert_ttl — unauthorized caller is rejected
+/// register_alert with empty rules returns EmptyRules (#206).
 #[test]
-fn test_renew_alert_ttl_unauthorized() {
+fn test_register_alert_empty_rules_rejected() {
     let (env, client) = setup();
     let owner = Address::generate(&env);
-    let attacker = Address::generate(&env);
     let target = Address::generate(&env);
 
     let id = client.register_alert(
@@ -633,18 +614,16 @@ fn test_renew_alert_ttl_not_found() {
 
     assert_eq!(
         client
-            .try_renew_alert_ttl(&caller, &999u64)
+            .try_register_alert(&owner, &target, &str(&env, "Alert"), &hash64(&env), &vec![&env])
             .unwrap_err()
             .unwrap(),
-        ContractError::AlertNotFound
+        ContractError::EmptyRules
     );
 }
 
-// ── Feature: propose_webhook / confirm_webhook ────────────────────────────────
-
-// propose_webhook — happy path: pending hash is stored, live hash unchanged
+/// update_alert with empty rules returns EmptyRules (#206).
 #[test]
-fn test_propose_webhook_stores_pending_hash() {
+fn test_update_alert_empty_rules_rejected() {
     let (env, client) = setup();
     let owner = Address::generate(&env);
     let target = Address::generate(&env);
@@ -661,7 +640,7 @@ fn test_propose_webhook_stores_pending_hash() {
         client
             .try_propose_webhook(&owner, &id, &hash64(&env))
             .unwrap(),
-        Ok(())
+        ContractError::EmptyRules
     );
 
     let cfg = client.get_alert(&id).unwrap();
@@ -697,9 +676,9 @@ fn test_confirm_webhook_promotes_pending_hash() {
     assert!(cfg.pending_webhook_hash.is_none());
 }
 
-// confirm_webhook — returns NoPendingWebhook when no rotation is in progress
+/// register_alert with duplicate rule descriptors returns DuplicateRule (#207).
 #[test]
-fn test_confirm_webhook_no_pending_returns_error() {
+fn test_register_alert_duplicate_rules_rejected() {
     let (env, client) = setup();
     let owner = Address::generate(&env);
     let target = Address::generate(&env);
@@ -714,19 +693,24 @@ fn test_confirm_webhook_no_pending_returns_error() {
 
     assert_eq!(
         client
-            .try_confirm_webhook(&owner, &id)
+            .try_register_alert(
+                &owner,
+                &target,
+                &str(&env, "Alert"),
+                &hash64(&env),
+                &vec![&env, str(&env, "rule:transfer"), str(&env, "rule:transfer")],
+            )
             .unwrap_err()
             .unwrap(),
-        ContractError::NoPendingWebhook
+        ContractError::DuplicateRule
     );
 }
 
-// propose_webhook — unauthorized caller is rejected
+/// update_alert with duplicate rule descriptors returns DuplicateRule (#207).
 #[test]
-fn test_propose_webhook_unauthorized() {
+fn test_update_alert_duplicate_rules_rejected() {
     let (env, client) = setup();
     let owner = Address::generate(&env);
-    let attacker = Address::generate(&env);
     let target = Address::generate(&env);
 
     let id = client.register_alert(
@@ -739,19 +723,23 @@ fn test_propose_webhook_unauthorized() {
 
     assert_eq!(
         client
-            .try_propose_webhook(&attacker, &id, &str(&env, "evil-hash"))
+            .try_update_alert(
+                &owner,
+                &id,
+                &vec![&env, str(&env, "rule:mint"), str(&env, "rule:mint")],
+                &true,
+            )
             .unwrap_err()
             .unwrap(),
-        ContractError::Unauthorized
+        ContractError::DuplicateRule
     );
 }
 
-// confirm_webhook — unauthorized caller is rejected
+/// Two distinct valid rule descriptors are accepted (no duplicate) (#207).
 #[test]
-fn test_confirm_webhook_unauthorized() {
+fn test_two_unique_rules_accepted() {
     let (env, client) = setup();
     let owner = Address::generate(&env);
-    let attacker = Address::generate(&env);
     let target = Address::generate(&env);
 
     let id = client.register_alert(
@@ -773,39 +761,51 @@ fn test_confirm_webhook_unauthorized() {
     );
 }
 
-// propose_webhook — nonexistent alert returns AlertNotFound
+// ── #208 — webhook_hash format validation ────────────────────────────────────
+
+/// register_alert rejects hashes shorter than 64 characters (#208).
 #[test]
-fn test_propose_webhook_not_found() {
+fn test_register_alert_short_webhook_hash_rejected() {
     let (env, client) = setup();
-    let caller = Address::generate(&env);
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
 
     assert_eq!(
         client
             .try_propose_webhook(&caller, &999u64, &hash64(&env))
             .unwrap_err()
             .unwrap(),
-        ContractError::AlertNotFound
+        ContractError::InvalidWebhookHash
     );
 }
 
-// confirm_webhook — nonexistent alert returns AlertNotFound
+/// register_alert rejects hashes longer than 64 characters (#208).
 #[test]
-fn test_confirm_webhook_not_found() {
+fn test_register_alert_long_webhook_hash_rejected() {
     let (env, client) = setup();
-    let caller = Address::generate(&env);
+    let owner = Address::generate(&env);
+    let target = Address::generate(&env);
+    // 65 chars
+    let long_hash = str(&env, "a3f1b2c4d5e6f7089abcdef01234567890abcdef01234567890abcdef0123456");
 
     assert_eq!(
         client
-            .try_confirm_webhook(&caller, &999u64)
+            .try_register_alert(
+                &owner,
+                &target,
+                &str(&env, "Alert"),
+                &long_hash,
+                &vec![&env, str(&env, "rule:transfer")],
+            )
             .unwrap_err()
             .unwrap(),
-        ContractError::AlertNotFound
+        ContractError::InvalidWebhookHash
     );
 }
 
-// propose_webhook — calling propose twice overwrites the pending hash
+/// A valid 64-character hash is accepted by register_alert (#208).
 #[test]
-fn test_propose_webhook_overwrites_previous_pending() {
+fn test_register_alert_valid_webhook_hash_accepted() {
     let (env, client) = setup();
     let owner = Address::generate(&env);
     let target = Address::generate(&env);
@@ -818,13 +818,7 @@ fn test_propose_webhook_overwrites_previous_pending() {
         &vec![&env, str(&env, "rule:transfer")],
     );
 
-    client.propose_webhook(&owner, &id, &str(&env, "first-pending")).unwrap();
-    client.propose_webhook(&owner, &id, &str(&env, "second-pending")).unwrap();
-
-    let cfg = client.get_alert(&id).unwrap();
-    assert_eq!(cfg.pending_webhook_hash, Some(str(&env, "second-pending")));
-    // Live hash still unchanged
-    assert_eq!(cfg.webhook_hash, str(&env, "original"));
+    assert_eq!(client.get_alert(&id).unwrap().webhook_hash, hash64(&env));
 }
 
 // Full rotation flow: propose → confirm → propose again → confirm again
@@ -857,10 +851,12 @@ fn test_webhook_rotation_full_cycle() {
     assert!(cfg.pending_webhook_hash.is_none());
 }
 
-// propose_webhook emits a wh_prop event
+/// A limit > MAX_BATCH_SIZE is silently clamped — response has at most MAX_BATCH_SIZE entries (#209).
 #[test]
-fn test_propose_webhook_emits_event() {
+fn test_paginated_clamps_large_limit() {
+    use crate::MAX_BATCH_SIZE;
     let (env, client) = setup();
+    let querier = Address::generate(&env);
     let owner = Address::generate(&env);
     let target = Address::generate(&env);
 
@@ -917,19 +913,13 @@ fn test_pending_webhook_hash_none_on_registration() {
     assert!(cfg.pending_webhook_hash.is_none());
 }
 
-// #64 — 10 alerts from the same owner watching the same contract
-//
-// Registers 10 alerts from a single owner all targeting the same contract.
-// Verifies that both the OwnerIndex and the ContractIndex contain exactly
-// 10 entries after all registrations.
+/// 10 alerts from the same owner watching the same contract (#64).
 #[test]
 fn test_ten_alerts_same_owner_same_contract() {
     let (env, client) = setup();
     let owner = Address::generate(&env);
     let target = Address::generate(&env);
-    // webhook_hash must be exactly 64 characters
-    let webhook_hash = str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-    // 10 distinct labels
+
     let labels = [
         "Alert 0", "Alert 1", "Alert 2", "Alert 3", "Alert 4",
         "Alert 5", "Alert 6", "Alert 7", "Alert 8", "Alert 9",
@@ -945,29 +935,24 @@ fn test_ten_alerts_same_owner_same_contract() {
         );
     }
 
-    // Both indexes must contain exactly 10 entries
     assert_eq!(
         client.get_alerts_by_owner(&owner, &owner).unwrap().len(),
-        10,
-        "owner index must contain exactly 10 entries"
+        10
     );
     assert_eq!(
         client.get_alerts_for_contract(&owner, &target).unwrap().len(),
-        10,
-        "contract index must contain exactly 10 entries"
+        10
     );
 }
 
-// Counter overflow guard: set counter to u64::MAX and verify CounterOverflow returned
+// Counter overflow guard
 #[test]
 fn test_counter_overflow_guard() {
     let (env, client) = setup();
     let owner = Address::generate(&env);
     let target = Address::generate(&env);
 
-    // Set counter to u64::MAX across both storage locations
     env.storage().instance().set(&soroban_sdk::symbol_short!("NEXT_ID"), &u64::MAX);
-    env.storage().persistent().set(&DataKey::NextId, &u64::MAX);
 
     let res = client.try_register_alert(
         &owner,

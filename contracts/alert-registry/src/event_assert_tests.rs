@@ -30,6 +30,10 @@ fn setup() -> (Env, AlertRegistryClient<'static>, Address, Address) {
     (env, client, owner, target)
 }
 
+fn hash64(env: &Env) -> String {
+    String::from_str(env, "a3f1b2c4d5e6f7089abcdef01234567890abcdef01234567890abcdef012345")
+}
+
 #[test]
 fn register_emits_alert_register() {
     let (env, client, owner, target) = setup();
