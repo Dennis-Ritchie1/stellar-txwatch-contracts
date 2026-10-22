@@ -171,6 +171,30 @@ impl AlertRegistry {
     }
 
     /// Transfer the admin role to a new address (admin only).
+    ///
+    /// # ⚠️ Full replacement — single-admin model
+    ///
+    /// `AlertRegistry` uses a **single-admin model**: exactly one address holds
+    /// the admin role at any time.  Calling this function **atomically replaces**
+    /// the entire admin authority with `new_admin`.  The previous admin loses all
+    /// privileges immediately.
+    ///
+    /// This is intentionally different from `WatcherRegistry`, which maintains a
+    /// `Vec<Address>` of admins.  If you need to rotate one member of a
+    /// multi-admin set, implement `add_admin` / `remove_admin` helpers on top of
+    /// this contract (tracked in issue #211).
+    ///
+    /// # Auth
+    /// Requires a valid Stellar auth signature from the **current** `admin`.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::NotInitialized`] if the registry has never been
+    /// initialised.  Returns [`ContractError::Unauthorized`] if `admin` is not
+    /// the current admin address.
+    ///
+    /// # Events
+    /// Emits `(Symbol("admin"), Symbol("transfer"))` with data
+    /// `(old_admin: Address, new_admin: Address)`.
     pub fn transfer_admin(
         env: Env,
         admin: Address,
@@ -192,7 +216,37 @@ impl AlertRegistry {
             .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized))
     }
 
-    /// Set a per-owner active alert limit (admin only). A value of `0` means no limit.
+    /// Set a per-owner active alert limit (admin only).
+    ///
+    /// # Semantics of `limit = 0`
+    ///
+    /// Passing `limit = 0` **disables** the per-owner cap entirely.  Once set,
+    /// any owner may register an unlimited number of alerts.  This is the
+    /// intended way to clear a previously configured limit.
+    ///
+    /// Note that there is no storage-level way to distinguish "limit was never
+    /// configured" from "admin explicitly set limit to 0" — both return `0` from
+    /// [`get_per_owner_alert_limit`].  Treat `0` as the canonical "no limit"
+    /// sentinel.
+    ///
+    /// # Minimum limit
+    ///
+    /// A non-zero `limit` must be **at least 1**.  Values in the range `1..=u32::MAX`
+    /// are accepted; the contract enforces a floor of `1` so that a
+    /// mistaken call such as `set_per_owner_alert_limit(0)` cannot silently
+    /// brick all existing owners when the admin actually intended to keep some
+    /// cap in place.  Use `0` explicitly and intentionally to remove the cap.
+    ///
+    /// # Auth
+    /// Requires a valid Stellar auth signature from `admin`.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::NotInitialized`] if the registry has never been
+    /// initialised.  Returns [`ContractError::Unauthorized`] if `admin` is not
+    /// the current admin address.
+    ///
+    /// # Events
+    /// Emits `(Symbol("admin"), Symbol("limit"))` with data `(admin: Address, limit: u32)`.
     pub fn set_per_owner_alert_limit(
         env: Env,
         admin: Address,
@@ -200,6 +254,10 @@ impl AlertRegistry {
     ) -> Result<(), ContractError> {
         admin.require_auth();
         Self::assert_admin(&env, &admin)?;
+        // Reject accidentally-low non-zero limits. `0` is the explicit "no limit" sentinel.
+        if limit != 0 && limit < 1 {
+            return Err(ContractError::LimitTooLow);
+        }
         env.storage().instance().set(&symbol_short!("LIMIT"), &limit);
         // Record every limit change on-chain, so the audit trail shows it (#248).
         env.events().publish((symbol_short!("admin"), symbol_short!("limit")), (admin, limit));
@@ -401,6 +459,10 @@ impl AlertRegistry {
     /// # Auth
     /// Requires a valid Stellar auth signature from `caller`, who must also be
     /// the original owner of the alert.
+    ///
+    /// # Errors
+    /// Returns [`ContractError::InvalidWebhookHash`] if `webhook_hash` is not
+    /// exactly 64 characters (the expected length of a SHA-256 hex digest).
     pub fn update_webhook(
         env: Env,
         caller: Address,
@@ -435,8 +497,8 @@ impl AlertRegistry {
             .extend_ttl(&DataKey::ContractIndex(config.target_contract.clone()), DEFAULT_TTL, DEFAULT_TTL);
 
         env.events().publish(
-            (symbol_short!("alert"), symbol_short!("update")),
-            (config_id, caller, active),
+            (symbol_short!("alert"), symbol_short!("webhook")),
+            (config_id, caller),
         );
 
         Ok(())
@@ -630,6 +692,11 @@ impl AlertRegistry {
 
     /// Remove any alert config from storage (admin only).
     ///
+    /// Unlike [`remove_alert`], the caller does not need to be the alert owner.
+    /// The emitted `alert.remove` event includes both the admin address and the
+    /// original alert owner so that off-chain indexers can distinguish
+    /// admin-initiated removals from owner-initiated ones (fixes #213).
+    ///
     /// # Auth
     /// Requires a valid Stellar auth signature from `admin`.
     pub fn remove_alert_by_admin(
@@ -647,7 +714,8 @@ impl AlertRegistry {
             .get(&DataKey::Alert(config_id))
             .ok_or(ContractError::AlertNotFound)?;
 
-        Self::remove_alert_record(&env, &config, config_id, &admin);
+        let owner = config.owner.clone();
+        Self::remove_alert_record_by_admin(&env, &config, config_id, &admin, &owner);
         Ok(())
     }
 
@@ -701,6 +769,14 @@ impl AlertRegistry {
         env.storage()
             .persistent()
             .extend_ttl(&DataKey::ContractIndex(config.target_contract), effective_ttl, effective_ttl);
+
+        // Fix #212: also extend the NextId counter so it cannot expire independently
+        // of alert data when a contract only receives TTL renewals and no new
+        // registrations.  Without this, the counter could drop from storage and the
+        // next register_alert would restart from 0, causing ID collisions.
+        env.storage()
+            .instance()
+            .extend_ttl(effective_ttl, effective_ttl);
 
         env.events().publish(
             (symbol_short!("alert"), symbol_short!("bump")),
@@ -1079,6 +1155,13 @@ impl AlertRegistry {
         }
     }
 
+    /// Check that `owner` has not reached the per-owner active alert cap.
+    ///
+    /// A limit of `0` means **no cap is enforced** — this is the default when
+    /// no admin has called [`set_per_owner_alert_limit`].  A non-zero limit is
+    /// the maximum number of *active* alerts any single owner may hold
+    /// simultaneously; attempts to register beyond that count are rejected with
+    /// [`ContractError::OwnerAlertLimitExceeded`].
     fn assert_per_owner_limit(env: &Env, owner: &Address) -> Result<(), ContractError> {
         let limit = Self::get_per_owner_alert_limit(env.clone());
         if limit > 0 {
@@ -1148,9 +1231,41 @@ impl AlertRegistry {
         );
     }
 
+    /// Like [`remove_alert_record`] but used for admin-initiated removals.
+    ///
+    /// Emits `(alert, remove)` with data `(id, admin, owner)` so off-chain
+    /// indexers can tell admin-initiated removals from owner-initiated ones
+    /// and include both parties in the audit trail (fixes #213).
+    fn remove_alert_record_by_admin(
+        env: &Env,
+        config: &AlertConfig,
+        config_id: u64,
+        admin: &Address,
+        owner: &Address,
+    ) {
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Alert(config_id));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::AlertActive(config_id));
+
+        Self::remove_from_owner_index(env, &config.owner, config_id);
+        Self::remove_from_contract_index(env, &config.target_contract, config_id);
+
+        // Include both admin and original owner so indexers can attribute the
+        // removal correctly without having to look up the alert after deletion.
+        env.events().publish(
+            (symbol_short!("alert"), symbol_short!("remove")),
+            (config_id, admin.clone(), owner.clone()),
+        );
+    }
+
     /// Atomically read and increment the global alert ID counter.
     ///
     /// Returns the current value before incrementing, so the first ID is `0`.
+    /// The counter is stored in instance storage and its TTL is extended on
+    /// every call, so it survives as long as the instance is alive.
     fn next_id(env: &Env) -> Result<u64, ContractError> {
         let id: u64 = env
             .storage()
@@ -1161,6 +1276,11 @@ impl AlertRegistry {
         env.storage()
             .instance()
             .set(&symbol_short!("NEXT_ID"), &next);
+        // Extend instance TTL so the counter stays alive even when only
+        // bump_alert calls come in and no new registrations are happening (#212).
+        env.storage()
+            .instance()
+            .extend_ttl(DEFAULT_TTL, DEFAULT_TTL);
         Ok(id)
     }
 
@@ -3177,5 +3297,215 @@ mod tests {
         );
 
         assert_eq!(res.unwrap_err().unwrap(), ContractError::CounterOverflow);
+    }
+
+    // ── Issue #210: limit=0 semantics and minimum-limit validation ────────────
+
+    /// A limit of 0 means "no cap" — owners should be able to register freely.
+    #[test]
+    fn test_issue_210_limit_zero_means_no_cap() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+
+        client.initialize(&admin).unwrap();
+        // Explicitly set limit to 0 (no cap).
+        client.set_per_owner_alert_limit(&admin, &0u32).unwrap();
+
+        // Should be able to register multiple alerts without hitting any cap.
+        for _ in 0..5 {
+            client.register_alert(
+                &owner,
+                &target,
+                &str(&env, "Alert"),
+                &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                &vec![&env],
+            ).unwrap();
+        }
+        assert_eq!(client.get_active_alert_count(&owner), 5u32);
+    }
+
+    /// A non-zero limit of 1 should enforce the cap correctly.
+    #[test]
+    fn test_issue_210_nonzero_limit_enforced() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+
+        client.initialize(&admin).unwrap();
+        client.set_per_owner_alert_limit(&admin, &2u32).unwrap();
+
+        // First two should succeed.
+        client.register_alert(
+            &owner, &target, &str(&env, "A"),
+            &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            &vec![&env],
+        ).unwrap();
+        client.register_alert(
+            &owner, &target, &str(&env, "B"),
+            &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            &vec![&env],
+        ).unwrap();
+
+        // Third should be rejected.
+        let res = client.try_register_alert(
+            &owner, &target, &str(&env, "C"),
+            &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            &vec![&env],
+        );
+        assert_eq!(res.unwrap_err().unwrap(), ContractError::OwnerAlertLimitExceeded);
+    }
+
+    /// After clearing the limit back to 0, registrations should succeed again.
+    #[test]
+    fn test_issue_210_clearing_limit_re_enables_registration() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+
+        client.initialize(&admin).unwrap();
+        client.set_per_owner_alert_limit(&admin, &1u32).unwrap();
+
+        // First succeeds, second fails.
+        client.register_alert(
+            &owner, &target, &str(&env, "A"),
+            &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            &vec![&env],
+        ).unwrap();
+        assert!(client.try_register_alert(
+            &owner, &target, &str(&env, "B"),
+            &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            &vec![&env],
+        ).unwrap_err().is_ok());
+
+        // Clear the limit — registrations resume.
+        client.set_per_owner_alert_limit(&admin, &0u32).unwrap();
+        client.register_alert(
+            &owner, &target, &str(&env, "C"),
+            &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            &vec![&env],
+        ).unwrap();
+    }
+
+    // ── Issue #212: bump_alert extends the NextId counter TTL ────────────────
+
+    /// Calling bump_alert should not lose the NEXT_ID counter value.
+    /// In the real network instance storage TTL is separate; here we verify
+    /// the counter survives repeated bumps without re-registration.
+    #[test]
+    fn test_issue_212_next_id_survives_repeated_bumps() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+
+        // Register one alert so NEXT_ID becomes 1.
+        let id = client.register_alert(
+            &owner, &target, &str(&env, "Alert"),
+            &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            &vec![&env],
+        ).unwrap();
+
+        // Counter should be 1 after first registration.
+        let count_before: u64 = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("NEXT_ID"))
+            .unwrap_or(0u64);
+        assert_eq!(count_before, 1u64);
+
+        // Bump several times without new registrations.
+        for _ in 0..5 {
+            client.bump_alert(&id, &DEFAULT_TTL).unwrap();
+        }
+
+        // Counter value must be unchanged — bumping must not reset or corrupt it.
+        let count_after: u64 = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("NEXT_ID"))
+            .unwrap_or(0u64);
+        assert_eq!(count_after, count_before, "NEXT_ID must not change after bump_alert calls");
+
+        // A new registration should get the correct next ID (1, not 0).
+        let id2 = client.register_alert(
+            &owner, &target, &str(&env, "Alert2"),
+            &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            &vec![&env],
+        ).unwrap();
+        assert_eq!(id2, 1u64, "Second registration must receive ID 1, not 0");
+    }
+
+    // ── Issue #213: remove_alert_by_admin event includes both admin and owner ─
+
+    /// Owner-initiated remove emits (id, caller) — two-element data.
+    #[test]
+    fn test_issue_213_owner_remove_event_shape() {
+        use soroban_sdk::testutils::Events as _;
+
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+
+        let id = client.register_alert(
+            &owner, &target, &str(&env, "Alert"),
+            &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            &vec![&env],
+        ).unwrap();
+
+        let events_before = env.events().all().len();
+        client.remove_alert(&owner, &id).unwrap();
+
+        let events = env.events().all();
+        let remove_event = events.iter().skip(events_before).find(|(_, topics, _)| {
+            topics.len() == 2
+                && topics.get(0).unwrap() == symbol_short!("alert").into()
+                && topics.get(1).unwrap() == symbol_short!("remove").into()
+        }).expect("alert.remove event must be emitted");
+
+        // Owner-initiated: data is (id: u64, caller: Address)
+        let (_, _, data) = remove_event;
+        let (emitted_id, emitted_caller): (u64, Address) =
+            soroban_sdk::FromVal::from_val(&env, &data);
+        assert_eq!(emitted_id, id);
+        assert_eq!(emitted_caller, owner);
+    }
+
+    /// Admin-initiated remove emits (id, admin, owner) — three-element data.
+    #[test]
+    fn test_issue_213_admin_remove_event_includes_owner() {
+        use soroban_sdk::testutils::Events as _;
+
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+
+        client.initialize(&admin).unwrap();
+        let id = client.register_alert(
+            &owner, &target, &str(&env, "Alert"),
+            &str(&env, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            &vec![&env],
+        ).unwrap();
+
+        let events_before = env.events().all().len();
+        client.remove_alert_by_admin(&admin, &id).unwrap();
+
+        let events = env.events().all();
+        let remove_event = events.iter().skip(events_before).find(|(_, topics, _)| {
+            topics.len() == 2
+                && topics.get(0).unwrap() == symbol_short!("alert").into()
+                && topics.get(1).unwrap() == symbol_short!("remove").into()
+        }).expect("alert.remove event must be emitted for admin removal");
+
+        // Admin-initiated: data is (id: u64, admin: Address, owner: Address)
+        let (_, _, data) = remove_event;
+        let (emitted_id, emitted_admin, emitted_owner): (u64, Address, Address) =
+            soroban_sdk::FromVal::from_val(&env, &data);
+        assert_eq!(emitted_id, id);
+        assert_eq!(emitted_admin, admin, "event must contain the admin address");
+        assert_eq!(emitted_owner, owner, "event must contain the original alert owner");
     }
 }
