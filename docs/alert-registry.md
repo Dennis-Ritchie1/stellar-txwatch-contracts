@@ -90,6 +90,8 @@ The `rules` field is a `Vec<String>` containing serialized rule descriptors. Eac
 |---|---|
 | `rule:transfer` | Alert when the target contract emits a transfer-like action. |
 | `rule:mint` | Alert when the target contract performs a mint or issuance event. |
+| `rule:invoke` | Alert whenever the target contract is invoked (any function). |
+| `rule:all` | Alert on any ledger entry change to the target contract (catch-all/debug). May produce very high webhook volume; watch rate limits. The watcher in stellar-txwatch-core must implement handlers for `rule:invoke` and `rule:all`. |
 
 The alert registry stores these descriptors verbatim and validates that each entry uses a recognized prefix before accepting it. Off-chain watcher logic still interprets prefixes and applies the corresponding alert behavior.
 
@@ -103,7 +105,7 @@ Registers a new alert configuration for a target contract address.
 
 **Requires auth:** `owner`
 
-**Validation:** Rule descriptors are checked against the known prefixes `rule:transfer` and `rule:mint`, and the contract panics if any rule is not recognized.
+**Validation:** Rule descriptors are checked against the known prefixes `rule:transfer`, `rule:mint`, `rule:invoke` and `rule:all`, and the contract panics if any rule is not recognized.
 
 **Parameters**
 
@@ -290,12 +292,29 @@ If a `WatcherRegistry` is configured (via `set_watcher_registry`), `querier` mus
 
 | Name | Type | Description |
 |---|---|---|
-| `querier` | `Address` | Address performing the query (checked against watcher registry if configured) |
 | `target_contract` | `Address` | Contract address to query |
 
-**Returns:** `Result<Vec<AlertConfig>, ContractError>` — `Ok(vec)` on success, may be empty.
+**Returns:** `Vec<AlertConfig>` — may be empty.
 
 ---
+
+### `get_active_alerts_paginated`
+
+Paginated variant of `get_active_alerts_for_contract`. `offset`/`limit` apply to the active alerts after filtering; `limit` is clamped to `MAX_BATCH_SIZE`. (Named without `_for_contract` because Soroban function names are limited to 32 characters.)
+
+| Name | Type | Description |
+|---|---|---|
+| `target_contract` | `Address` | Contract address to query |
+| `offset` | `u32` | Number of active alerts to skip |
+| `limit` | `u32` | Max alerts to return |
+
+**Returns:** `Vec<AlertConfig>`
+
+---
+
+### `get_alert_ids_by_owner` / `get_alert_ids_for_contract`
+
+Return only the live alert IDs (entries still in storage) from the owner / contract index, without deserializing configs. Cheaper than the full getters; no watcher gating.
 
 ### `get_alerts_by_owner`
 
@@ -330,9 +349,9 @@ Updates only the label of an existing alert, leaving `rules` and `webhook_hash` 
 
 **Returns:** `Result<(), ContractError>`
 
-**Errors:** `AlertNotFound` if ID does not exist; `Unauthorized` if caller is not the owner.
+**Errors:** `AlertNotFound` if ID does not exist; `Unauthorized` if caller is not the owner; `LabelTooLong` if `label` exceeds 128 bytes.
 
-**Panics:** if `label` exceeds 128 bytes.
+**Events:** `("alert", "update")` with `(id, caller, active)`.
 
 ---
 
@@ -557,3 +576,38 @@ Emits `("alert", "transfer")`.
 ### Tags: `register_alert(..., tags)` / `update_tags`
 `AlertConfig.tags: Option<Vec<String>>` — at most 10 tags of at most 32 bytes each (`TooManyTags`, `TagTooLong`).
 `update_tags(caller, config_id, tags)` replaces them; emits `("alert", "tags")`.
+---
+
+### `batch_register_alerts`
+
+Registers up to `MAX_BATCH_SIZE` (50) alerts for `caller` in one call. Every input is validated and the per-owner limit is checked for the whole batch before any write, so the batch is atomic.
+
+**Requires auth:** `caller`
+
+| Name | Type | Description |
+|---|---|---|
+| `caller` | `Address` | Owner of all registered alerts |
+| `inputs` | `Vec<AlertInput>` | `{ target_contract, label, webhook_hash, rules }` per alert |
+
+**Returns:** `Result<Vec<u64>, ContractError>` — IDs in insertion order.
+
+**Errors:** `BatchTooLarge`, `InvalidWebhookHash`, `LabelTooLong`, `EmptyRules`, `TooManyRules`, `OwnerAlertLimitExceeded`.
+
+**Events:** one `("alert", "register")` per alert.
+
+---
+
+### `pause_alert` / `unpause_alert`
+
+Admin-only. Sets `active = false` / `true` on an alert without owner auth. Owners can still toggle `active` via `update_alert`.
+
+**Requires auth:** `admin` (owner auth is not sufficient)
+
+| Name | Type | Description |
+|---|---|---|
+| `admin` | `Address` | Contract admin |
+| `config_id` | `u64` | Alert to pause/unpause |
+
+**Errors:** `Unauthorized` (non-admin), `AlertNotFound`.
+
+**Events:** `("alert", "update")` with `(id, admin, active)`.

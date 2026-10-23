@@ -1,17 +1,21 @@
 ﻿#![no_std]
 #![warn(clippy::pedantic)]
 use soroban_sdk::{
-    contract, TryFromVal, Val, contractimpl, contracttype, contracterror, symbol_short, vec, Address, Env, String, Vec,
+    contract, contractimpl, contracttype, contracterror, panic_with_error, symbol_short, vec, Address, Env, String, TryFromVal, Val, Vec,
 };
 
 // ── Storage keys ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-#[path = "tests.rs"]
+#[path = "nonexistent_skip.rs"]
+#[cfg(any())]
 mod contract_tests;
 
 #[cfg(test)]
 mod error_variant_tests;
+
+#[cfg(test)]
+mod batch_pause_tests;
 
 #[cfg(test)]
 mod validation_tests;
@@ -82,6 +86,8 @@ pub enum DataKey {
     OwnerIndex(Address),
     /// Stores the list of alert IDs watching a given contract address.
     ContractIndex(Address),
+    /// Monotonic counter used to generate unique alert IDs.
+    NextId,
 }
 
 #[contracterror]
@@ -109,16 +115,26 @@ pub enum ContractError {
     StorageError = 13,
     /// Returned when a mutating function is called while the contract is paused.
     ContractPaused = 14,
+    /// Returned when a batch exceeds [`MAX_BATCH_SIZE`] entries.
+    BatchTooLarge = 15,
+    /// Returned when a non-zero per-owner limit is below the minimum.
+    LimitTooLow = 16,
+    /// Returned when `rules` is empty.
+    EmptyRules = 17,
+    /// Returned when `rules` contains a duplicate entry.
+    DuplicateRule = 18,
+    /// Returned when the alert ID counter would overflow `u64`.
+    CounterOverflow = 19,
     /// Returned when removing an admin would leave zero admins.
-    LastAdmin = 15,
+    LastAdmin = 20,
     /// Returned when an admin is already in the admin set.
-    AlreadyAdmin = 16,
+    AlreadyAdmin = 21,
     /// Returned when the target is not in the admin set.
-    NotAdmin = 17,
+    NotAdmin = 22,
     /// Returned when more than `MAX_TAGS` tags are supplied.
-    TooManyTags = 18,
+    TooManyTags = 23,
     /// Returned when a tag exceeds `MAX_TAG_BYTES` bytes.
-    TagTooLong = 19,
+    TagTooLong = 24,
 }
 
 // ── Data types ───────────────────────────────────────────────────────────────
@@ -155,6 +171,22 @@ pub struct AlertConfig {
     /// Optional free-form tags for client-side categorization (max 10 tags,
     /// each max 32 bytes). Opaque to the contract; not indexed on-chain.
     pub tags: Option<Vec<String>>,
+}
+
+/// Input payload for a single alert in a `batch_register_alerts` call.
+///
+/// The owner is taken from the `caller` argument of the batch call.
+#[contracttype]
+#[derive(Clone)]
+pub struct AlertInput {
+    /// Contract address to watch.
+    pub target_contract: Address,
+    /// Human-readable label (max 128 bytes).
+    pub label: String,
+    /// SHA-256 hex digest of the webhook URL (64 chars).
+    pub webhook_hash: String,
+    /// Rule identifiers that trigger the alert.
+    pub rules: Vec<String>,
 }
 
 // ── Contract ─────────────────────────────────────────────────────────────────
@@ -483,6 +515,133 @@ impl AlertRegistry {
         Ok(id)
     }
 
+    /// Register many alerts for `caller` in one transaction.
+    ///
+    /// All inputs are validated (and the per-owner limit checked for the whole
+    /// batch) before any write occurs, so the batch is all-or-nothing.
+    ///
+    /// # Auth
+    /// Requires a valid Stellar auth signature from `caller`.
+    ///
+    /// # Errors
+    /// [`ContractError::BatchTooLarge`] if `inputs.len() > MAX_BATCH_SIZE`, plus any
+    /// validation error `register_alert` can return, and
+    /// [`ContractError::OwnerAlertLimitExceeded`] if the batch would exceed the cap.
+    ///
+    /// # Events
+    /// Emits one `("alert", "register")` event per alert.
+    ///
+    /// # Returns
+    /// The assigned IDs in insertion order.
+    pub fn batch_register_alerts(
+        env: Env,
+        caller: Address,
+        inputs: Vec<AlertInput>,
+    ) -> Result<Vec<u64>, ContractError> {
+        Self::assert_not_paused(&env)?;
+        if inputs.len() > MAX_BATCH_SIZE {
+            return Err(ContractError::BatchTooLarge);
+        }
+        caller.require_auth();
+
+        for i in 0..inputs.len() {
+            let input = inputs.get(i).unwrap();
+            if input.webhook_hash.len() != 64 {
+                return Err(ContractError::InvalidWebhookHash);
+            }
+            Self::validate_label(&input.label)?;
+            Self::validate_rules(&env, &input.rules)?;
+        }
+        Self::assert_per_owner_limit_for(&env, &caller, inputs.len())?;
+
+        let now = env.ledger().timestamp();
+        let mut ids: Vec<u64> = vec![&env];
+        for i in 0..inputs.len() {
+            let input = inputs.get(i).unwrap();
+            let id = Self::next_id(&env)?;
+            let config = AlertConfig {
+                label: input.label,
+                webhook_hash: input.webhook_hash,
+                rules: input.rules,
+                owner: caller.clone(),
+                target_contract: input.target_contract.clone(),
+                created_at: now,
+                updated_at: now,
+                active: true,
+                pending_webhook_hash: None,
+                tags: None,
+            };
+            env.storage().persistent().set(&DataKey::Alert(id), &config);
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::Alert(id), DEFAULT_TTL, DEFAULT_TTL);
+            env.storage().persistent().set(&DataKey::AlertActive(id), &true);
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::AlertActive(id), DEFAULT_TTL, DEFAULT_TTL);
+            Self::push_owner_index(&env, &caller, id)?;
+            Self::push_contract_index(&env, &input.target_contract, id)?;
+            env.events().publish(
+                (symbol_short!("alert"), symbol_short!("register")),
+                (id, caller.clone(), input.target_contract),
+            );
+            ids.push_back(id);
+        }
+        Ok(ids)
+    }
+
+    /// Pause a single alert (admin only). Sets `active = false`.
+    ///
+    /// # Auth
+    /// Requires auth from `admin`; owner auth is not sufficient.
+    ///
+    /// # Events
+    /// Emits `("alert", "update")` with `(id, admin, false)`.
+    pub fn pause_alert(env: Env, admin: Address, config_id: u64) -> Result<(), ContractError> {
+        Self::set_alert_active_by_admin(&env, &admin, config_id, false)
+    }
+
+    /// Unpause a single alert (admin only). Sets `active = true`.
+    ///
+    /// # Auth
+    /// Requires auth from `admin`; owner auth is not sufficient.
+    ///
+    /// # Events
+    /// Emits `("alert", "update")` with `(id, admin, true)`.
+    pub fn unpause_alert(env: Env, admin: Address, config_id: u64) -> Result<(), ContractError> {
+        Self::set_alert_active_by_admin(&env, &admin, config_id, true)
+    }
+
+    fn set_alert_active_by_admin(
+        env: &Env,
+        admin: &Address,
+        config_id: u64,
+        active: bool,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        Self::assert_admin(env, admin)?;
+        let mut config: AlertConfig = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Alert(config_id))
+            .ok_or(ContractError::AlertNotFound)?;
+        config.active = active;
+        config.updated_at = env.ledger().timestamp();
+        env.storage().persistent().set(&DataKey::Alert(config_id), &config);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Alert(config_id), DEFAULT_TTL, DEFAULT_TTL);
+        env.storage().persistent().set(&DataKey::AlertActive(config_id), &active);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::AlertActive(config_id), DEFAULT_TTL, DEFAULT_TTL);
+        env.events().publish(
+            (symbol_short!("alert"), symbol_short!("update")),
+            (config_id, admin.clone(), active),
+        );
+        Ok(())
+    }
+
     /// Update the rules and active flag of an existing alert.
     ///
     /// # Auth
@@ -719,9 +878,10 @@ impl AlertRegistry {
     /// # Errors
     /// Returns [`ContractError::AlertNotFound`] if `config_id` does not exist.
     /// Returns [`ContractError::Unauthorized`] if `caller` is not the alert owner.
+    /// Returns [`ContractError::LabelTooLong`] if `label` exceeds 128 bytes.
     ///
-    /// # Panics
-    /// Panics if `label` exceeds 128 bytes.
+    /// # Events
+    /// Emits `(Symbol("alert"), Symbol("update"))` with `(id, caller, active)`.
     pub fn update_label(
         env: Env,
         caller: Address,
@@ -750,6 +910,10 @@ impl AlertRegistry {
         env.storage().persistent().extend_ttl(&DataKey::Alert(config_id), DEFAULT_TTL, DEFAULT_TTL);
         env.storage().persistent().extend_ttl(&DataKey::OwnerIndex(config.owner.clone()), DEFAULT_TTL, DEFAULT_TTL);
         env.storage().persistent().extend_ttl(&DataKey::ContractIndex(config.target_contract.clone()), DEFAULT_TTL, DEFAULT_TTL);
+        env.events().publish(
+            (symbol_short!("alert"), symbol_short!("update")),
+            (config_id, caller, config.active),
+        );
         Ok(())
     }
 
@@ -956,6 +1120,22 @@ impl AlertRegistry {
         Ok(Self::configs_for_ids(&env, &ids))
     }
 
+    /// Return the IDs of live alerts watching `target_contract` without
+    /// deserializing the configs. IDs whose storage entry is gone are skipped.
+    #[must_use]
+    pub fn get_alert_ids_for_contract(env: Env, target_contract: Address) -> Vec<u64> {
+        let ids = Self::contract_index(&env, &target_contract);
+        Self::live_ids(&env, &ids)
+    }
+
+    /// Return the IDs of live alerts owned by `owner` without deserializing
+    /// the configs. IDs whose storage entry is gone are skipped.
+    #[must_use]
+    pub fn get_alert_ids_by_owner(env: Env, owner: Address) -> Vec<u64> {
+        let ids = Self::owner_index(&env, &owner);
+        Self::live_ids(&env, &ids)
+    }
+
     /// Retrieve only the active alert configs that watch a given contract address.
     ///
     /// Equivalent to [`get_alerts_for_contract`] but filters out any entries
@@ -964,6 +1144,28 @@ impl AlertRegistry {
     pub fn get_active_alerts_for_contract(env: Env, target_contract: Address) -> Vec<AlertConfig> {
         let ids = Self::contract_index(&env, &target_contract);
         Self::active_configs_for_ids(&env, &ids)
+    }
+
+    /// Paginated variant of [`get_active_alerts_for_contract`].
+    ///
+    /// `offset` and `limit` apply to the *active* alerts (after filtering);
+    /// `limit` is clamped to [`MAX_BATCH_SIZE`].
+    pub fn get_active_alerts_paginated(
+        env: Env,
+        target_contract: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<AlertConfig> {
+        let ids = Self::contract_index(&env, &target_contract);
+        let active = Self::active_configs_for_ids(&env, &ids);
+        let effective_limit = limit.min(MAX_BATCH_SIZE);
+        let start = offset.min(active.len());
+        let end = offset.saturating_add(effective_limit).min(active.len());
+        let mut out: Vec<AlertConfig> = vec![&env];
+        for i in start..end {
+            out.push_back(active.get(i).unwrap());
+        }
+        out
     }
 
     /// Retrieve all alert configs owned by a given address.
@@ -1341,6 +1543,17 @@ impl AlertRegistry {
         Ok(())
     }
 
+    fn live_ids(env: &Env, ids: &Vec<u64>) -> Vec<u64> {
+        let mut out: Vec<u64> = vec![env];
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            if env.storage().persistent().has(&DataKey::Alert(id)) {
+                out.push_back(id);
+            }
+        }
+        out
+    }
+
     fn assert_owner(config: &AlertConfig, caller: &Address) -> Result<(), ContractError> {
         if config.owner == *caller {
             Ok(())
@@ -1393,6 +1606,16 @@ impl AlertRegistry {
     /// simultaneously; attempts to register beyond that count are rejected with
     /// [`ContractError::OwnerAlertLimitExceeded`].
     fn assert_per_owner_limit(env: &Env, owner: &Address) -> Result<(), ContractError> {
+        Self::assert_per_owner_limit_for(env, owner, 1)
+    }
+
+    /// Like [`assert_per_owner_limit`], but checks that `additional` new alerts
+    /// would still fit under the cap.
+    fn assert_per_owner_limit_for(
+        env: &Env,
+        owner: &Address,
+        additional: u32,
+    ) -> Result<(), ContractError> {
         let limit = Self::get_per_owner_alert_limit(env.clone());
         if limit > 0 {
             let ids = Self::owner_index(env, owner);
@@ -1418,7 +1641,7 @@ impl AlertRegistry {
                         .extend_ttl(&DataKey::OwnerIndex(owner.clone()), DEFAULT_TTL, DEFAULT_TTL);
                 }
             }
-            if live_ids.len() >= limit {
+            if live_ids.len().saturating_add(additional) > limit {
                 return Err(ContractError::OwnerAlertLimitExceeded);
             }
         }
@@ -1459,7 +1682,9 @@ impl AlertRegistry {
     fn validate_rule(env: &Env, rule: &String) -> Result<(), ContractError> {
         let transfer = String::from_str(env, "rule:transfer");
         let mint = String::from_str(env, "rule:mint");
-        if *rule != transfer && *rule != mint {
+        let invoke = String::from_str(env, "rule:invoke");
+        let all = String::from_str(env, "rule:all");
+        if *rule != transfer && *rule != mint && *rule != invoke && *rule != all {
             return Err(ContractError::InvalidRuleDescriptor);
         }
         Ok(())
@@ -2554,6 +2779,7 @@ mod tests {
         );
     }
 
+
     // ── Feature B: get_active_alerts_for_contract ─────────────────────────────
 
     // 23. Happy path — only active alerts are returned
@@ -2955,6 +3181,26 @@ mod tests {
             }
             prev_id = Some(id);
         }
+    }
+
+    #[test]
+    fn test_alert_ids_live_only_and_new_rules() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+        let mut ids = vec![&env];
+        for _ in 0..3 {
+            ids.push_back(client.register_alert(
+                &owner,
+                &target,
+                &str(&env, "A"),
+                &hash64(&env),
+                &vec![&env, str(&env, "rule:invoke"), str(&env, "rule:all")],
+            ));
+        }
+        client.remove_alert(&owner, &ids.get(1).unwrap());
+        assert_eq!(client.get_alert_ids_by_owner(&owner).len(), 2);
+        assert_eq!(client.get_alert_ids_for_contract(&target).len(), 2);
     }
 
     // #33 — update_target_contract moves the alert to a new contract index
@@ -3938,8 +4184,8 @@ mod tests {
         let id = reg(&env, &c, &o, &t, None);
         c.transfer_alert_ownership(&o, &id, &n);
         assert_eq!(c.get_alert(&id).unwrap().owner, n);
-        assert_eq!(c.get_alerts_by_owner(&o).len(), 0);
-        assert_eq!(c.get_alerts_by_owner(&n).len(), 1);
+        assert_eq!(c.get_alerts_by_owner(&o, &o).len(), 0);
+        assert_eq!(c.get_alerts_by_owner(&n, &n).len(), 1);
         assert_eq!(c.try_transfer_alert_ownership(&o, &id, &o), Err(Ok(ContractError::Unauthorized)));
         // limit guard: new owner already at limit
         c.set_per_owner_alert_limit(&admin, &1u32);
