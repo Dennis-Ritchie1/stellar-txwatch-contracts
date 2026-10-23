@@ -22,7 +22,7 @@ fn test_authorized_watcher_can_query_alert_registry_open_mode() {
 
     // Initialize watcher registry and authorize the watcher
     watcher_client.initialize(&admin);
-    watcher_client.register_watcher(&admin, &watcher);
+    watcher_client.register_watcher(&admin, &watcher, &None);
 
     // Register an alert in the alert registry
     let id = alert_client.register_alert(
@@ -76,7 +76,7 @@ fn test_removed_watcher_loses_authorization_alert_data_intact() {
     let target = Address::generate(&env);
 
     watcher_client.initialize(&admin);
-    watcher_client.register_watcher(&admin, &watcher);
+    watcher_client.register_watcher(&admin, &watcher, &None);
 
     alert_client.register_alert(
         &owner,
@@ -112,7 +112,7 @@ fn test_watcher_gating_registered_watcher_can_read() {
 
     // Set up watcher registry
     watcher_client.initialize(&admin);
-    watcher_client.register_watcher(&admin, &watcher);
+    watcher_client.register_watcher(&admin, &watcher, &None);
 
     // Initialize alert registry and point it at the watcher registry
     alert_client.initialize(&admin).unwrap();
@@ -187,7 +187,7 @@ fn test_watcher_gating_removed_watcher_loses_access() {
     let target = Address::generate(&env);
 
     watcher_client.initialize(&admin);
-    watcher_client.register_watcher(&admin, &watcher);
+    watcher_client.register_watcher(&admin, &watcher, &None);
 
     alert_client.initialize(&admin).unwrap();
     let watcher_contract_id = watcher_client.address.clone();
@@ -237,7 +237,7 @@ fn test_watcher_gating_get_alerts_by_owner() {
     let target = Address::generate(&env);
 
     watcher_client.initialize(&admin);
-    watcher_client.register_watcher(&admin, &watcher);
+    watcher_client.register_watcher(&admin, &watcher, &None);
 
     alert_client.initialize(&admin).unwrap();
     let watcher_contract_id = watcher_client.address.clone();
@@ -287,7 +287,7 @@ fn test_remove_watcher_emits_event_with_correct_address() {
     let watcher = Address::generate(&env);
 
     watcher_client.initialize(&admin);
-    watcher_client.register_watcher(&admin, &watcher).unwrap();
+    watcher_client.register_watcher(&admin, &watcher, &None).unwrap();
     watcher_client.remove_watcher(&admin, &watcher).unwrap();
 
     let events = env.events().all();
@@ -319,7 +319,7 @@ fn test_remove_watcher_event_and_immediate_access_revocation() {
     let target = Address::generate(&env);
 
     watcher_client.initialize(&admin);
-    watcher_client.register_watcher(&admin, &watcher).unwrap();
+    watcher_client.register_watcher(&admin, &watcher, &None).unwrap();
 
     alert_client.initialize(&admin).unwrap();
     let watcher_contract_id = watcher_client.address.clone();
