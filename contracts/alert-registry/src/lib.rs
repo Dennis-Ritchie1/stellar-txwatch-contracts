@@ -2206,7 +2206,7 @@ mod tests {
         let target = Address::generate(&env);
 
         watcher_client.initialize(&admin);
-        watcher_client.register_watcher(&admin, &watcher);
+        watcher_client.register_watcher(&admin, &watcher, &None);
 
         // Point alert registry at the watcher registry
         alert_client.initialize(&admin).unwrap();
@@ -2281,7 +2281,7 @@ mod tests {
         let target = Address::generate(&env);
 
         watcher_client.initialize(&admin);
-        watcher_client.register_watcher(&admin, &watcher);
+        watcher_client.register_watcher(&admin, &watcher, &None);
 
         alert_client.initialize(&admin).unwrap();
         let watcher_contract_id = watcher_client.address.clone();
