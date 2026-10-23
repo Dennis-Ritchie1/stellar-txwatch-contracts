@@ -891,6 +891,22 @@ impl AlertRegistry {
         Ok(Self::configs_for_ids(&env, &ids))
     }
 
+    /// Return the IDs of live alerts watching `target_contract` without
+    /// deserializing the configs. IDs whose storage entry is gone are skipped.
+    #[must_use]
+    pub fn get_alert_ids_for_contract(env: Env, target_contract: Address) -> Vec<u64> {
+        let ids = Self::contract_index(&env, &target_contract);
+        Self::live_ids(&env, &ids)
+    }
+
+    /// Return the IDs of live alerts owned by `owner` without deserializing
+    /// the configs. IDs whose storage entry is gone are skipped.
+    #[must_use]
+    pub fn get_alert_ids_by_owner(env: Env, owner: Address) -> Vec<u64> {
+        let ids = Self::owner_index(&env, &owner);
+        Self::live_ids(&env, &ids)
+    }
+
     /// Retrieve only the active alert configs that watch a given contract address.
     ///
     /// Equivalent to [`get_alerts_for_contract`] but filters out any entries
@@ -1163,6 +1179,17 @@ impl AlertRegistry {
         Ok(())
     }
 
+    fn live_ids(env: &Env, ids: &Vec<u64>) -> Vec<u64> {
+        let mut out: Vec<u64> = vec![env];
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            if env.storage().persistent().has(&DataKey::Alert(id)) {
+                out.push_back(id);
+            }
+        }
+        out
+    }
+
     fn assert_owner(config: &AlertConfig, caller: &Address) -> Result<(), ContractError> {
         if config.owner == *caller {
             Ok(())
@@ -1261,7 +1288,9 @@ impl AlertRegistry {
     fn validate_rule(env: &Env, rule: &String) -> Result<(), ContractError> {
         let transfer = String::from_str(env, "rule:transfer");
         let mint = String::from_str(env, "rule:mint");
-        if *rule != transfer && *rule != mint {
+        let invoke = String::from_str(env, "rule:invoke");
+        let all = String::from_str(env, "rule:all");
+        if *rule != transfer && *rule != mint && *rule != invoke && *rule != all {
             return Err(ContractError::InvalidRuleDescriptor);
         }
         Ok(())
@@ -2721,6 +2750,26 @@ mod tests {
             }
             prev_id = Some(id);
         }
+    }
+
+    #[test]
+    fn test_alert_ids_live_only_and_new_rules() {
+        let (env, client) = setup();
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+        let mut ids = vec![&env];
+        for _ in 0..3 {
+            ids.push_back(client.register_alert(
+                &owner,
+                &target,
+                &str(&env, "A"),
+                &hash64(&env),
+                &vec![&env, str(&env, "rule:invoke"), str(&env, "rule:all")],
+            ));
+        }
+        client.remove_alert(&owner, &ids.get(1).unwrap());
+        assert_eq!(client.get_alert_ids_by_owner(&owner).len(), 2);
+        assert_eq!(client.get_alert_ids_for_contract(&target).len(), 2);
     }
 
     // #33 — update_target_contract moves the alert to a new contract index

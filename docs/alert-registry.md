@@ -90,6 +90,8 @@ The `rules` field is a `Vec<String>` containing serialized rule descriptors. Eac
 |---|---|
 | `rule:transfer` | Alert when the target contract emits a transfer-like action. |
 | `rule:mint` | Alert when the target contract performs a mint or issuance event. |
+| `rule:invoke` | Alert whenever the target contract is invoked (any function). |
+| `rule:all` | Alert on any ledger entry change to the target contract (catch-all/debug). May produce very high webhook volume; watch rate limits. The watcher in stellar-txwatch-core must implement handlers for `rule:invoke` and `rule:all`. |
 
 The alert registry stores these descriptors verbatim and validates that each entry uses a recognized prefix before accepting it. Off-chain watcher logic still interprets prefixes and applies the corresponding alert behavior.
 
@@ -103,7 +105,7 @@ Registers a new alert configuration for a target contract address.
 
 **Requires auth:** `owner`
 
-**Validation:** Rule descriptors are checked against the known prefixes `rule:transfer` and `rule:mint`, and the contract panics if any rule is not recognized.
+**Validation:** Rule descriptors are checked against the known prefixes `rule:transfer`, `rule:mint`, `rule:invoke` and `rule:all`, and the contract panics if any rule is not recognized.
 
 **Parameters**
 
@@ -296,6 +298,10 @@ If a `WatcherRegistry` is configured (via `set_watcher_registry`), `querier` mus
 **Returns:** `Result<Vec<AlertConfig>, ContractError>` — `Ok(vec)` on success, may be empty.
 
 ---
+
+### `get_alert_ids_by_owner` / `get_alert_ids_for_contract`
+
+Return only the live alert IDs (entries still in storage) from the owner / contract index, without deserializing configs. Cheaper than the full getters; no watcher gating.
 
 ### `get_alerts_by_owner`
 
