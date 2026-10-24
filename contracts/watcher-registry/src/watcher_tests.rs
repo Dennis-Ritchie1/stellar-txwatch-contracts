@@ -19,8 +19,8 @@ fn setup() -> (Env, WatcherRegistryClient<'static>, Address) {
 #[test]
 fn initialize_sets_the_admin() {
     let (_env, client, admin) = setup();
-    assert_eq!(client.get_admins().unwrap().len(), 1);
-    assert_eq!(client.get_admin().unwrap(), admin);
+    assert_eq!(client.get_admins().len(), 1);
+    assert_eq!(client.get_admin(), admin);
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn duplicate_add_admin_is_idempotent() {
     let second = Address::generate(&env);
     client.add_admin(&admin, &second);
     client.add_admin(&admin, &second);
-    assert_eq!(client.get_admins().unwrap().len(), 2);
+    assert_eq!(client.get_admins().len(), 2);
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn transfer_admin_replaces_the_admin_set() {
     let (env, client, admin) = setup();
     let new_admin = Address::generate(&env);
     client.transfer_admin(&admin, &new_admin);
-    let admins = client.get_admins().unwrap();
+    let admins = client.get_admins();
     assert_eq!(admins.len(), 1);
     assert_eq!(admins.get(0).unwrap(), new_admin);
 }

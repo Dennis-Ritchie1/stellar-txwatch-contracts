@@ -35,6 +35,11 @@ export interface Client {
   get_per_owner_alert_limit(): Promise<number | undefined>;
   get_owner_alert_config({ owner }: { owner: string }): Promise<OwnerAlertConfig | undefined>;
   set_per_owner_alert_limit({ limit }: { limit: number }): Promise<void>;
+  register_watcher({ admin, watcher, expires_at }: { admin: string; watcher: string; expires_at?: bigint }): Promise<void>;
+  batch_register_watchers({ admin, watchers }: { admin: string; watchers: string[] }): Promise<number>;
+  renew_watcher({ admin, watcher, new_expiry }: { admin: string; watcher: string; new_expiry?: bigint }): Promise<void>;
+  set_paused({ admin, paused }: { admin: string; paused: boolean }): Promise<void>;
+  is_paused(): Promise<boolean>;
 }
 
 export class WatcherRegistry implements Client {
@@ -63,28 +68,25 @@ export class WatcherRegistry implements Client {
     await this.contract.call('set_per_owner_alert_limit', { limit });
   }
 
-  async register_watcher({ admin, watcher, label }: { admin: string; watcher: string; label?: string }): Promise<void> {
-    await this.contract.call('register_watcher', { admin, watcher, label });
+  async register_watcher({ admin, watcher, expires_at }: { admin: string; watcher: string; expires_at?: bigint }): Promise<void> {
+    await this.contract.call('register_watcher', { admin, watcher, expires_at });
   }
 
-  async get_watcher_info({ watcher }: { watcher: string }): Promise<WatcherInfo | undefined> {
-    const result = await this.contract.call('get_watcher_info', { watcher });
-    const value = result.result;
-    return value === undefined || value === null ? undefined : (value as WatcherInfo);
+  async batch_register_watchers({ admin, watchers }: { admin: string; watchers: string[] }): Promise<number> {
+    const result = await this.contract.call('batch_register_watchers', { admin, watchers });
+    return Number(result.result);
   }
 
-  async get_all_watchers(): Promise<string[]> {
-    const result = await this.contract.call('get_all_watchers');
-    return result.result as string[];
+  async renew_watcher({ admin, watcher, new_expiry }: { admin: string; watcher: string; new_expiry?: bigint }): Promise<void> {
+    await this.contract.call('renew_watcher', { admin, watcher, new_expiry });
   }
 
-  async get_all_watchers_paginated({ offset, limit }: { offset: number; limit: number }): Promise<string[]> {
-    const result = await this.contract.call('get_all_watchers_paginated', { offset, limit });
-    return result.result as string[];
+  async set_paused({ admin, paused }: { admin: string; paused: boolean }): Promise<void> {
+    await this.contract.call('set_paused', { admin, paused });
   }
 
-  async get_admins(): Promise<string[]> {
-    const result = await this.contract.call('get_admins');
-    return result.result as string[];
+  async is_paused(): Promise<boolean> {
+    const result = await this.contract.call('is_paused');
+    return Boolean(result.result);
   }
 }
