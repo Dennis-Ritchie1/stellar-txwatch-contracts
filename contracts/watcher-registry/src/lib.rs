@@ -1,12 +1,18 @@
 #![no_std]
 #![warn(clippy::pedantic)]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, contracterror, symbol_short, vec, Address, Env, Symbol, Vec,
+    contract, contractimpl, contracttype, contracterror, symbol_short, vec, Address, Env, Map, Symbol, Vec,
 };
 
 /// Number of ledgers to extend instance storage TTL by on each access.
 /// At ~5s per ledger this is roughly 30 days.
 const DEFAULT_TTL: u32 = 518_400;
+
+/// Maximum number of addresses accepted by `batch_register_watchers`.
+pub const MAX_BATCH_SIZE: u32 = 20;
+
+/// Maximum number of watchers that may be registered at once.
+pub const MAX_WATCHERS: u32 = 1_000;
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 
@@ -21,6 +27,12 @@ pub enum ContractError {
     LastAdmin = 4,
     /// Returned when the specified watcher is not currently registered.
     WatcherNotFound = 5,
+    /// Returned by mutating entrypoints while the registry is paused.
+    ContractPaused = 6,
+    /// Returned when a batch exceeds [`MAX_BATCH_SIZE`].
+    BatchTooLarge = 7,
+    /// Returned when registration would exceed [`MAX_WATCHERS`].
+    WatcherLimitExceeded = 8,
 }
 
 // ── Storage keys ─────────────────────────────────────────────────────────────
@@ -32,6 +44,10 @@ pub enum DataKey {
     Admins,
     /// Stores the `Vec<Address>` of authorized watcher nodes.
     Watchers,
+    /// Stores the paused flag (circuit breaker).
+    Paused,
+    /// Stores a `Map<Address, u64>` of watcher expiry timestamps.
+    Expiries,
 }
 
 // ── Contract ─────────────────────────────────────────────────────────────────
@@ -94,6 +110,7 @@ impl WatcherRegistry {
     ) -> Result<(), ContractError> {
         caller.require_auth();
         Self::assert_admin(&env, &caller)?;
+        Self::assert_not_paused(&env)?;
 
         let mut admins = Self::load_admins(&env);
         for i in 0..admins.len() {
@@ -134,6 +151,7 @@ impl WatcherRegistry {
     ) -> Result<(), ContractError> {
         caller.require_auth();
         Self::assert_admin(&env, &caller)?;
+        Self::assert_not_paused(&env)?;
 
         let admins = Self::load_admins(&env);
         if admins.len() <= 1 {
@@ -183,6 +201,7 @@ impl WatcherRegistry {
     ) -> Result<(), ContractError> {
         admin.require_auth();
         Self::assert_admin(&env, &admin)?;
+        Self::assert_not_paused(&env)?;
 
         let new_admins: Vec<Address> = vec![&env, new_admin.clone()];
         env.storage().instance().set(&DataKey::Admins, &new_admins);
@@ -200,13 +219,18 @@ impl WatcherRegistry {
     /// Register an authorized watcher node (any admin may call this).
     ///
     /// Idempotent — registering an already-authorized watcher is a no-op.
+    ///
+    /// `expires_at` is an optional ledger timestamp after which the watcher is
+    /// no longer authorized (see [`WatcherRegistry::renew_watcher`]).
     pub fn register_watcher(
         env: Env,
         admin: Address,
         watcher: Address,
+        expires_at: Option<u64>,
     ) -> Result<(), ContractError> {
         admin.require_auth();
         Self::assert_admin(&env, &admin)?;
+        Self::assert_not_paused(&env)?;
 
         let mut watchers = Self::load_watchers(&env);
         for i in 0..watchers.len() {
@@ -214,6 +238,10 @@ impl WatcherRegistry {
                 return Ok(()); // already registered, idempotent
             }
         }
+        if watchers.len() >= MAX_WATCHERS {
+            return Err(ContractError::WatcherLimitExceeded);
+        }
+        Self::set_expiry(&env, &watcher, expires_at);
         watchers.push_back(watcher.clone());
         env.storage().instance().set(&DataKey::Watchers, &watchers);
         Self::extend_instance_ttl(&env);
@@ -249,6 +277,7 @@ impl WatcherRegistry {
     ) -> Result<(), ContractError> {
         admin.require_auth();
         Self::assert_admin(&env, &admin)?;
+        Self::assert_not_paused(&env)?;
 
         let watchers = Self::load_watchers(&env);
         let mut updated: Vec<Address> = vec![&env];
@@ -269,6 +298,7 @@ impl WatcherRegistry {
         // subscribe to this event — it is the authoritative signal that a
         // watcher's trust has been revoked.
         if removed {
+            Self::set_expiry(&env, &watcher, None);
             Self::decrement_watcher_count(&env);
             env.events().publish(
                 (symbol_short!("watcher"), symbol_short!("remove")),
@@ -303,6 +333,7 @@ impl WatcherRegistry {
     ) -> Result<(), ContractError> {
         admin.require_auth();
         Self::assert_admin(&env, &admin)?;
+        Self::assert_not_paused(&env)?;
 
         let watchers = Self::load_watchers(&env);
         let mut found = false;
@@ -319,6 +350,7 @@ impl WatcherRegistry {
         if !found {
             return Err(ContractError::WatcherNotFound);
         }
+        Self::set_expiry(&env, &old_watcher, None);
 
         // Add new_watcher only if not already present
         let mut already_present = false;
@@ -350,6 +382,111 @@ impl WatcherRegistry {
         Ok(())
     }
 
+    /// Register up to [`MAX_BATCH_SIZE`] watchers in one call.
+    ///
+    /// Already-registered and duplicate addresses are skipped. Returns the
+    /// number of newly registered watchers and emits one `("watcher",
+    /// "register")` event for each.
+    ///
+    /// # Errors
+    /// [`ContractError::BatchTooLarge`] if `watchers.len() > MAX_BATCH_SIZE`;
+    /// [`ContractError::WatcherLimitExceeded`] if the total would exceed
+    /// [`MAX_WATCHERS`].
+    pub fn batch_register_watchers(
+        env: Env,
+        admin: Address,
+        watchers: Vec<Address>,
+    ) -> Result<u32, ContractError> {
+        admin.require_auth();
+        Self::assert_admin(&env, &admin)?;
+        Self::assert_not_paused(&env)?;
+
+        if watchers.len() > MAX_BATCH_SIZE {
+            return Err(ContractError::BatchTooLarge);
+        }
+
+        let mut stored = Self::load_watchers(&env);
+        let mut added: Vec<Address> = vec![&env];
+        for i in 0..watchers.len() {
+            let w = watchers.get(i).unwrap();
+            if !stored.contains(&w) {
+                stored.push_back(w.clone());
+                added.push_back(w);
+            }
+        }
+        if stored.len() > MAX_WATCHERS {
+            return Err(ContractError::WatcherLimitExceeded);
+        }
+
+        env.storage().instance().set(&DataKey::Watchers, &stored);
+        Self::extend_instance_ttl(&env);
+        for i in 0..added.len() {
+            let w = added.get(i).unwrap();
+            Self::increment_watcher_count(&env);
+            env.events()
+                .publish((symbol_short!("watcher"), symbol_short!("register")), w);
+        }
+
+        Ok(added.len())
+    }
+
+    /// Set or clear the expiry of an already-registered watcher.
+    ///
+    /// Passing `None` makes the authorization permanent again.
+    ///
+    /// # Errors
+    /// [`ContractError::WatcherNotFound`] if `watcher` is not registered.
+    pub fn renew_watcher(
+        env: Env,
+        admin: Address,
+        watcher: Address,
+        new_expiry: Option<u64>,
+    ) -> Result<(), ContractError> {
+        admin.require_auth();
+        Self::assert_admin(&env, &admin)?;
+        Self::assert_not_paused(&env)?;
+
+        if !Self::load_watchers(&env).contains(&watcher) {
+            return Err(ContractError::WatcherNotFound);
+        }
+        Self::set_expiry(&env, &watcher, new_expiry);
+        Self::extend_instance_ttl(&env);
+
+        env.events().publish(
+            (symbol_short!("watcher"), symbol_short!("renew")),
+            (watcher, new_expiry),
+        );
+        Ok(())
+    }
+
+    /// Pause or unpause the registry (circuit breaker). Any admin may call this.
+    ///
+    /// While paused, all mutating entrypoints except this one return
+    /// [`ContractError::ContractPaused`]; reads and `is_authorized` keep working.
+    pub fn set_paused(env: Env, admin: Address, paused: bool) -> Result<(), ContractError> {
+        admin.require_auth();
+        Self::assert_admin(&env, &admin)?;
+        env.storage().instance().set(&DataKey::Paused, &paused);
+        Self::extend_instance_ttl(&env);
+
+        let topic = if paused {
+            symbol_short!("pause")
+        } else {
+            symbol_short!("unpause")
+        };
+        env.events().publish((symbol_short!("admin"), topic), admin);
+        Ok(())
+    }
+
+    /// Return `true` if the registry is currently paused.
+    #[must_use]
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
     /// Check if an address is an authorized watcher.
     ///
     /// Renamed from `is_authorized` for clarity in cross-contract call contexts —
@@ -358,12 +495,13 @@ impl WatcherRegistry {
     pub fn is_watcher_authorized(env: Env, watcher: Address) -> bool {
         Self::extend_instance_ttl(&env);
         let watchers = Self::load_watchers(&env);
-        for i in 0..watchers.len() {
-            if watchers.get(i).unwrap() == watcher {
-                return true;
-            }
+        if !watchers.contains(&watcher) {
+            return false;
         }
-        false
+        match Self::load_expiries(&env).get(watcher) {
+            Some(exp) => env.ledger().timestamp() <= exp,
+            None => true,
+        }
     }
 
     /// Alias for [`is_watcher_authorized`] kept for backwards compatibility.
@@ -384,6 +522,7 @@ impl WatcherRegistry {
     pub fn clear_all_watchers(env: Env, admin: Address) -> Result<(), ContractError> {
         admin.require_auth();
         Self::assert_admin(&env, &admin)?;
+        Self::assert_not_paused(&env)?;
 
         let watchers = Self::load_watchers(&env);
         for i in 0..watchers.len() {
@@ -396,6 +535,7 @@ impl WatcherRegistry {
 
         let empty: Vec<Address> = vec![&env];
         env.storage().instance().set(&DataKey::Watchers, &empty);
+        env.storage().instance().remove(&DataKey::Expiries);
         Self::extend_instance_ttl(&env);
 
         // Reset the count to zero
@@ -503,6 +643,32 @@ impl WatcherRegistry {
         }
     }
 
+    fn assert_not_paused(env: &Env) -> Result<(), ContractError> {
+        if Self::is_paused(env.clone()) {
+            return Err(ContractError::ContractPaused);
+        }
+        Ok(())
+    }
+
+    fn load_expiries(env: &Env) -> Map<Address, u64> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Expiries)
+            .unwrap_or_else(|| Map::new(env))
+    }
+
+    /// Set (`Some`) or clear (`None`) a watcher's expiry timestamp.
+    fn set_expiry(env: &Env, watcher: &Address, expires_at: Option<u64>) {
+        let mut m = Self::load_expiries(env);
+        match expires_at {
+            Some(exp) => m.set(watcher.clone(), exp),
+            None => {
+                m.remove(watcher.clone());
+            }
+        }
+        env.storage().instance().set(&DataKey::Expiries, &m);
+    }
+
     /// Load the current watcher list from instance storage, or return an empty vec.
     fn load_watchers(env: &Env) -> Vec<Address> {
         env.storage()
@@ -562,7 +728,7 @@ mod tests {
 
         assert!(!client.is_watcher_authorized(&watcher));
         assert_eq!(
-            client.try_register_watcher(&admin, &watcher).unwrap(),
+            client.try_register_watcher(&admin, &watcher, &None).unwrap(),
             Ok(())
         );
         assert!(client.is_watcher_authorized(&watcher));
@@ -584,7 +750,7 @@ mod tests {
         let (env, admin, client) = setup();
         let watcher = Address::generate(&env);
 
-        client.register_watcher(&admin, &watcher);
+        client.register_watcher(&admin, &watcher, &None);
         assert_eq!(client.try_remove_watcher(&admin, &watcher).unwrap(), Ok(()));
         assert!(!client.is_watcher_authorized(&watcher));
     }
@@ -602,7 +768,7 @@ mod tests {
         );
         // new admin can register watchers
         assert_eq!(
-            client.try_register_watcher(&new_admin, &watcher).unwrap(),
+            client.try_register_watcher(&new_admin, &watcher, &None).unwrap(),
             Ok(())
         );
         assert!(client.is_watcher_authorized(&watcher));
@@ -636,7 +802,7 @@ mod tests {
 
         assert_eq!(
             client
-                .try_register_watcher(&attacker, &watcher)
+                .try_register_watcher(&attacker, &watcher, &None)
                 .unwrap_err()
                 .unwrap(),
             ContractError::Unauthorized
@@ -650,7 +816,7 @@ mod tests {
         let attacker = Address::generate(&env);
         let watcher = Address::generate(&env);
 
-        client.register_watcher(&admin, &watcher);
+        client.register_watcher(&admin, &watcher, &None);
         assert_eq!(
             client
                 .try_remove_watcher(&attacker, &watcher)
@@ -705,11 +871,11 @@ mod tests {
         let watcher = Address::generate(&env);
 
         assert_eq!(
-            client.try_register_watcher(&admin, &watcher).unwrap(),
+            client.try_register_watcher(&admin, &watcher, &None).unwrap(),
             Ok(())
         );
         assert_eq!(
-            client.try_register_watcher(&admin, &watcher).unwrap(),
+            client.try_register_watcher(&admin, &watcher, &None).unwrap(),
             Ok(())
         );
         assert_eq!(client.get_watchers().len(), 1);
@@ -723,7 +889,7 @@ mod tests {
 
         for _ in 0..5 {
             assert_eq!(
-                client.try_register_watcher(&admin, &watcher).unwrap(),
+                client.try_register_watcher(&admin, &watcher, &None).unwrap(),
                 Ok(())
             );
         }
@@ -738,9 +904,9 @@ mod tests {
         let w2 = Address::generate(&env);
         let w3 = Address::generate(&env);
 
-        client.register_watcher(&admin, &w1);
-        client.register_watcher(&admin, &w2);
-        client.register_watcher(&admin, &w3);
+        client.register_watcher(&admin, &w1, &None);
+        client.register_watcher(&admin, &w2, &None);
+        client.register_watcher(&admin, &w3, &None);
 
         assert_eq!(client.get_watchers().len(), 3);
         assert!(client.is_watcher_authorized(&w1));
@@ -756,9 +922,9 @@ mod tests {
         let w2 = Address::generate(&env);
         let w3 = Address::generate(&env);
 
-        client.try_register_watcher(&admin, &w1).unwrap();
-        client.try_register_watcher(&admin, &w2).unwrap();
-        client.try_register_watcher(&admin, &w3).unwrap();
+        client.try_register_watcher(&admin, &w1, &None).unwrap();
+        client.try_register_watcher(&admin, &w2, &None).unwrap();
+        client.try_register_watcher(&admin, &w3, &None).unwrap();
         assert_eq!(client.get_watchers().len(), 3);
 
         client.try_remove_watcher(&admin, &w1).unwrap();
@@ -806,9 +972,9 @@ mod tests {
         let w2 = Address::generate(&env);
         let w3 = Address::generate(&env);
 
-        client.try_register_watcher(&admin, &w1).unwrap();
-        client.try_register_watcher(&admin, &w2).unwrap();
-        client.try_register_watcher(&admin, &w3).unwrap();
+        client.try_register_watcher(&admin, &w1, &None).unwrap();
+        client.try_register_watcher(&admin, &w2, &None).unwrap();
+        client.try_register_watcher(&admin, &w3, &None).unwrap();
         assert_eq!(client.get_watchers().len(), 3);
 
         assert_eq!(
@@ -827,7 +993,7 @@ mod tests {
         let (env, admin, client) = setup();
         let attacker = Address::generate(&env);
 
-        client.try_register_watcher(&admin, &Address::generate(&env)).unwrap();
+        client.try_register_watcher(&admin, &Address::generate(&env), &None).unwrap();
 
         assert_eq!(
             client
@@ -864,7 +1030,7 @@ mod tests {
         );
         assert_eq!(
             client
-                .try_register_watcher(&admin, &watcher)
+                .try_register_watcher(&admin, &watcher, &None)
                 .unwrap_err()
                 .unwrap(),
             ContractError::Unauthorized
@@ -884,7 +1050,7 @@ mod tests {
 
         // second admin can now register watchers
         assert_eq!(
-            client.try_register_watcher(&second_admin, &watcher).unwrap(),
+            client.try_register_watcher(&second_admin, &watcher, &None).unwrap(),
             Ok(())
         );
         assert!(client.is_authorized(&watcher));
@@ -917,7 +1083,7 @@ mod tests {
 
         assert_eq!(
             client
-                .try_register_watcher(&second_admin, &watcher)
+                .try_register_watcher(&second_admin, &watcher, &None)
                 .unwrap_err()
                 .unwrap(),
             ContractError::Unauthorized
@@ -1030,7 +1196,7 @@ mod tests {
         let (env, admin, client) = setup();
         let watcher = Address::generate(&env);
 
-        client.register_watcher(&admin, &watcher);
+        client.register_watcher(&admin, &watcher, &None);
         client.remove_watcher(&admin, &watcher);
 
         assert!(!env.events().all().is_empty());
@@ -1042,7 +1208,7 @@ mod tests {
         let (env, admin, client) = setup();
         let watcher = Address::generate(&env);
 
-        client.register_watcher(&admin, &watcher);
+        client.register_watcher(&admin, &watcher, &None);
         client.remove_watcher(&admin, &watcher);
 
         let events = env.events().all();
@@ -1077,8 +1243,8 @@ mod tests {
         let w1 = Address::generate(&env);
         let w2 = Address::generate(&env);
 
-        client.register_watcher(&admin, &w1);
-        client.register_watcher(&admin, &w2);
+        client.register_watcher(&admin, &w1, &None);
+        client.register_watcher(&admin, &w2, &None);
         assert_eq!(client.get_watcher_count(), 2);
 
         client.remove_watcher(&admin, &w1);
@@ -1097,7 +1263,7 @@ mod tests {
         let old = Address::generate(&env);
         let new = Address::generate(&env);
 
-        client.register_watcher(&admin, &old);
+        client.register_watcher(&admin, &old, &None);
         assert_eq!(client.try_replace_watcher(&admin, &old, &new).unwrap(), Ok(()));
 
         assert!(!client.is_authorized(&old));
@@ -1126,7 +1292,7 @@ mod tests {
         let new = Address::generate(&env);
         let attacker = Address::generate(&env);
 
-        client.register_watcher(&admin, &old);
+        client.register_watcher(&admin, &old, &None);
         assert_eq!(
             client.try_replace_watcher(&attacker, &old, &new).unwrap_err().unwrap(),
             ContractError::Unauthorized
@@ -1140,8 +1306,8 @@ mod tests {
         let old = Address::generate(&env);
         let new = Address::generate(&env);
 
-        client.register_watcher(&admin, &old);
-        client.register_watcher(&admin, &new);
+        client.register_watcher(&admin, &old, &None);
+        client.register_watcher(&admin, &new, &None);
         assert_eq!(client.get_watcher_count(), 2);
 
         assert_eq!(client.try_replace_watcher(&admin, &old, &new).unwrap(), Ok(()));
@@ -1160,7 +1326,7 @@ mod tests {
         let old = Address::generate(&env);
         let new = Address::generate(&env);
 
-        client.register_watcher(&admin, &old);
+        client.register_watcher(&admin, &old, &None);
         client.replace_watcher(&admin, &old, &new);
 
         // At least two events emitted (remove + replace)
@@ -1195,5 +1361,115 @@ mod tests {
 
         // Verify non-admin returns false
         assert!(!client.is_admin(&non_admin));
+    }
+
+    // ── pause / batch / expiry ───────────────────────────────────────────────
+
+    #[test]
+    fn test_pause_blocks_mutations_not_reads() {
+        let (env, admin, client) = setup();
+        let w = Address::generate(&env);
+        client.register_watcher(&admin, &w, &None);
+        client.set_paused(&admin, &true);
+        assert!(client.is_paused());
+        let other = Address::generate(&env);
+        assert_eq!(
+            client.try_register_watcher(&admin, &other, &None),
+            Err(Ok(ContractError::ContractPaused))
+        );
+        assert_eq!(
+            client.try_remove_watcher(&admin, &w),
+            Err(Ok(ContractError::ContractPaused))
+        );
+        assert_eq!(
+            client.try_clear_all_watchers(&admin),
+            Err(Ok(ContractError::ContractPaused))
+        );
+        assert_eq!(
+            client.try_add_admin(&admin, &other),
+            Err(Ok(ContractError::ContractPaused))
+        );
+        assert_eq!(
+            client.try_remove_admin(&admin, &other),
+            Err(Ok(ContractError::ContractPaused))
+        );
+        assert!(client.is_authorized(&w));
+        assert_eq!(client.get_watcher_count(), 1);
+        client.set_paused(&admin, &false);
+        client.remove_watcher(&admin, &w);
+    }
+
+    #[test]
+    fn test_set_paused_requires_admin() {
+        let (env, _admin, client) = setup();
+        let stranger = Address::generate(&env);
+        assert_eq!(
+            client.try_set_paused(&stranger, &true),
+            Err(Ok(ContractError::Unauthorized))
+        );
+    }
+
+    #[test]
+    fn test_batch_register_happy_path_and_idempotent() {
+        let (env, admin, client) = setup();
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
+        let batch = vec![&env, a.clone(), b.clone(), a.clone()];
+        assert_eq!(client.batch_register_watchers(&admin, &batch), 2);
+        assert_eq!(client.batch_register_watchers(&admin, &batch), 0);
+        assert_eq!(client.get_watcher_count(), 2);
+        assert!(client.is_authorized(&a) && client.is_authorized(&b));
+    }
+
+    #[test]
+    fn test_batch_register_oversized() {
+        let (env, admin, client) = setup();
+        let mut batch: Vec<Address> = vec![&env];
+        for _ in 0..=MAX_BATCH_SIZE {
+            batch.push_back(Address::generate(&env));
+        }
+        assert_eq!(
+            client.try_batch_register_watchers(&admin, &batch),
+            Err(Ok(ContractError::BatchTooLarge))
+        );
+    }
+
+    #[test]
+    fn test_batch_register_limit_exceeded() {
+        let (env, admin, client) = setup();
+        let mut stored: Vec<Address> = vec![&env];
+        for _ in 0..MAX_WATCHERS {
+            stored.push_back(Address::generate(&env));
+        }
+        env.as_contract(&client.address, || {
+            env.storage().instance().set(&DataKey::Watchers, &stored);
+        });
+        let batch = vec![&env, Address::generate(&env)];
+        assert_eq!(
+            client.try_batch_register_watchers(&admin, &batch),
+            Err(Ok(ContractError::WatcherLimitExceeded))
+        );
+    }
+
+    #[test]
+    fn test_watcher_expiry_and_renewal() {
+        use soroban_sdk::testutils::Ledger as _;
+        let (env, admin, client) = setup();
+        env.ledger().set_timestamp(100);
+        let w = Address::generate(&env);
+        client.register_watcher(&admin, &w, &Some(200));
+        assert!(client.is_authorized(&w));
+        env.ledger().set_timestamp(201);
+        assert!(!client.is_authorized(&w));
+        client.renew_watcher(&admin, &w, &Some(500));
+        assert!(client.is_authorized(&w));
+        client.renew_watcher(&admin, &w, &None);
+        env.ledger().set_timestamp(10_000);
+        assert!(client.is_authorized(&w));
+        let ghost = Address::generate(&env);
+        assert_eq!(
+            client.try_renew_watcher(&admin, &ghost, &None),
+            Err(Ok(ContractError::WatcherNotFound))
+        );
     }
 }
